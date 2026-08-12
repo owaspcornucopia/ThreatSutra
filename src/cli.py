@@ -1,15 +1,22 @@
 """
-Command-line interface for ThreatSutra.
-This module is the entry point for running the ThreatSutra pipeline.
-It starts the orchestration process, displays analysis progress, and
-presents the generated results through a command-line interface.
-Additional helper functions support user interaction and output handling
-used by the CLI.
+Command-line interface for ThreatSutra: This module is the entry point for running the ThreatSutra pipeline. It runs the orchestrator, generates artifacts for each threat, presents
+them to a human reviewer alongside source traceability and a relevance assessment (issues #7, #12), and - only for approved artifacts - exports
+them to GitHub (issue #8).
 """
-import os
 import json
-from datetime import datetime
-from orchestrator import run_pipeline
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from src.adapters.GitHubIssueClient import GitHubIssueClient
+from src.adapters.GitHubIssueExporter import GitHubIssueExporter
+from src.orchestrator import (
+    GITHUB_REPO,
+    call_ai_model,
+    generate_evil_user_story,
+    generate_verification_test,
+    run_pipeline,)
+from src.relevance import assess_relevance
+from src.validation import ValidationError, neutralize_for_display, validate_evil_user_story, validate_verification_test
 
 def print_header(text: str) -> None:
     print("\n" + "=" * 60)
@@ -18,9 +25,7 @@ def print_header(text: str) -> None:
 
 def ask_for_approval() -> str: #Prompts the user to review and approve generated content before it is finalized.
     while True:
-        choice = input(
-            "\nApprove this output? [y]es / [n]o / [e]dit manually: "
-        ).strip().lower()
+        choice = input("\nApprove this output? [y]es / [n]o / [e]dit manually: ").strip().lower()
         if choice in ("y", "yes"):
             return "approve"
         if choice in ("n", "no"):
@@ -30,44 +35,96 @@ def ask_for_approval() -> str: #Prompts the user to review and approve generated
         print("Please type y, n, or e.")
 
 def edit_text(label: str, current_text: str) -> str:
-    print(f"\nCurrent {label}:\n{current_text}")
-    new_text = input(
-        f"Type the replacement {label} (or press Enter to keep it):\n> "
-    ).strip()
+    print(f"\nCurrent {label}:\n{neutralize_for_display(current_text)}")
+    new_text = input(f"Type the replacement {label} (or press Enter to keep it):\n> ").strip()
     return new_text if new_text else current_text
 
-def save_output(result: dict, decision: str) -> None:    #Saves the reviewed output to the outputs/ folder as a JSON file.
+def revalidate_edit(artifact_type: str, text: str) -> str:
+    """Issue #7: edited text is untrusted input from the terminal and must be
+    revalidated against the same format contract as model output."""
+    if artifact_type == "evil_user_story":
+        return validate_evil_user_story(text)
+    return validate_verification_test(text)
+
+def save_output(artifact: dict, decision: str) -> None:    #Saves reviewer's decision to outputs/ as a JSON file with an audit-safe timestamp.
     project_root = os.path.dirname(os.path.dirname(__file__))
     output_dir = os.path.join(project_root, "outputs")
     os.makedirs(output_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"review_{timestamp}.json"
+    timestamp = datetime.now(timezone.utc).isoformat()
+    filename = f"review_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
     output_path = os.path.join(output_dir, filename)
     output_data = {
         "timestamp": timestamp,
         "decision": decision,
-        "source_threat_id": result["source_threat_id"],
-        "source_card_id": result["source_card_id"],
-        "evil_user_story": result["evil_user_story"],
-        "verification_test": result["verification_test"],
+        "artifact_type": artifact["artifact_type"],
+        "text": artifact["text"],
+        "source_threat_id": artifact["source_threat_id"],
+        "source_card_id": artifact["source_card_id"],
+        "source_milestone_number": artifact["source_milestone_number"],
     }
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(output_data, f, indent=4, ensure_ascii=False)
     print(f"\nOutput saved successfully to:\n{output_path}")
+    return output_path
+
+def print_relevance(assessment) -> None:
+    marker = {"green": "[RELEVANT]", "yellow": "[REVIEW]", "red": "[LOW RELEVANCE]"}[assessment.color]
+    print(f"\nRelevance   : {marker} {assessment.score}/10")
+    print(f"Why         : {neutralize_for_display(assessment.explanation)}")
+    if assessment.assessed_issue_urls:
+        print(f"From issues : {', '.join(assessment.assessed_issue_urls)}")
+
+def review_artifact(context, artifact: dict, exporter: GitHubIssueExporter) -> None:
+    """Issue #7: presents one generated artifact plus traceability and relevance
+    context, collects a decision, and - only on approval - exports it (issue #8)."""
+    label = "Evil user story" if artifact["artifact_type"] == "evil_user_story" else "Verification test"
+    print(f"\n{label}:\n{neutralize_for_display(artifact['text'])}")
+    print(f"\nSource threat : {context.threat_id} (#{context.threat_number})")
+    print(f"Source card   : {context.card_id}")
+    print(f"Milestone     : #{context.milestone_number} - {neutralize_for_display(context.milestone_title)}")
+    decision = ask_for_approval()
+    if decision == "edit":
+        edited = edit_text(label.lower(), artifact["text"])
+        try:
+            artifact = {**artifact, "text": revalidate_edit(artifact["artifact_type"], edited)}
+            decision = "approve"
+        except ValidationError as exc:
+            print(f"\nEdited text was rejected: {exc}\nTreating as 'reject'.")
+            decision = "reject"
+    save_output(artifact, decision)
+    if decision != "approve":
+        return
+    result = exporter.export(artifact)
+    if result["status"] == "dry_run":
+        print(f"\n[DRY RUN] Would create GitHub issue:\nTitle: {result['title']}")
+    elif result["status"] == "already_exported":
+       print(f"\nAlready exported as {result['marker'].get('github_issue_url')}")
+    else:
+        print(f"\nExported as {result['marker'].get('github_issue_url')}")
 
 def main():
     print_header("ThreatSutra")
     print("Loading project data and preparing security analysis...")
-    results = run_pipeline()
-    for index, result in enumerate(results, start=1):
-        threat = result["threat"]
-        card = result["cornucopia_card"]
-        print_header(f"THREAT {index} of {len(results)} (number: {threat.get('number')})")
-        print(f"Title       : {threat.get('title')}")
-        print(f"Card        : {card.get('id')} - {card.get('name')}")
-        print(f"Milestones  : {len(result['milestones'])} open")
+    contexts = run_pipeline()
+    issue_client = GitHubIssueClient()
+    # Live vs. dry-run is decided by whether GITHUB_WRITE_TOKEN is configured
+    # (see GitHubIssueExporter) - per Johan's guidance, providing the
+    # credentials plus approving an artifact is what makes export happen,
+    # not a separate flag.
+    exporter = GitHubIssueExporter(repo=GITHUB_REPO)
+    if exporter.dry_run:
+        print("\n[DRY RUN] GITHUB_WRITE_TOKEN is not set - approved artifacts will be shown, not exported.")
+    else:
+        print("\n[LIVE EXPORT] GITHUB_WRITE_TOKEN is set - approved artifacts will be created as real GitHub issues.")
+    for index, context in enumerate(contexts, start=1):
+        print_header(f"THREAT {index} of {len(contexts)} (number: {context.threat_number})")
+        print(f"Title       : {neutralize_for_display(context.threat_title)}")
+        relevance = assess_relevance(context, call_ai_model, issue_client)
+        print_relevance(relevance)
+        review_artifact(context, generate_evil_user_story(context), exporter)
+        review_artifact(context, generate_verification_test(context), exporter)
     print_header("Analysis Complete")
-    print(f"Successfully processed {len(results)} threat(s).")
+    print(f"Successfully processed {len(contexts)} threat(s).")
 
 if __name__ == "__main__":
     main()
