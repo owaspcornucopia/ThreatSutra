@@ -5,3 +5,4 @@ __pycache__/
 .env
 outputs/*
 !outputs/.gitkeep
+=8.0.0
