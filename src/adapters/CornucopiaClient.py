@@ -38,7 +38,7 @@ class CornucopiaClient:
     def get_cards(self, edition: str) -> list:
         """
         Returns every card for one edition. Results are cached per client instance, so looking up several cards from the same
-        edition only fetches that edition once.Issue #3: the full response envelope is validated (not just individual
+        edition only fetches that edition once. Issue #3: Full response envelope is validated (not just individual
        cards later), transient failures are retried, and retrieval metadata is kept for #11 provenance.
         """
         if edition not in SUPPORTED_EDITIONS:
