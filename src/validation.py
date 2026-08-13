@@ -261,6 +261,9 @@ def extract_model_text_field(response_text: str, field: str) -> str:
     structured output validation instead of interpolating raw model text).
     """
     _validate_text(response_text, "response_text", "LLM output")
+    response_text = response_text.strip()
+    if response_text.startswith("```json") and response_text.endswith("```"):
+      response_text = response_text[7:-3].strip()
     try:
         payload = json.loads(response_text)
     except json.JSONDecodeError as exc:
@@ -343,6 +346,9 @@ def extract_model_json_fields(response_text: str, fields: tuple) -> dict:
     field (issue #12's relevance assessment: score + explanation).
     """
     _validate_text(response_text, "response_text", "LLM output")
+    response_text = response_text.strip()
+    if response_text.startswith("```json") and response_text.endswith("```"):
+      response_text = response_text[7:-3].strip()
     try:
         payload = json.loads(response_text)
     except json.JSONDecodeError as exc:
