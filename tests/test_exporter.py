@@ -16,12 +16,12 @@ def make_exporter(tmp_path, dry_run=True):
 def test_exporter_defaults_to_dry_run_without_a_write_token(tmp_path, monkeypatch):
     """ export is live once credentials are configured, and dry-run only because there's nothing
     to authenticate with yet - not a separate opt-in flag to remember."""
-    monkeypatch.delenv("GITHUB_WRITE_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_API", raising=False)
     exporter = GitHubIssueExporter(repo="owaspcornucopia/ThreatSutra", markers_dir=str(tmp_path))
     assert exporter.dry_run is True
 
 def test_exporter_goes_live_automatically_once_a_write_token_is_configured(tmp_path, monkeypatch):
-    monkeypatch.setenv("GITHUB_WRITE_TOKEN", "fake-token-for-test")
+    monkeypatch.setenv("GITHUB_API", "fake-token-for-test")
     exporter = GitHubIssueExporter(repo="owaspcornucopia/ThreatSutra", markers_dir=str(tmp_path))
     assert exporter.dry_run is False
 
@@ -41,9 +41,9 @@ def test_export_refuses_incomplete_artifact(tmp_path):
         exporter.export({"artifact_type": "evil_user_story", "text": "incomplete"})
 
 def test_live_export_without_token_raises(tmp_path, monkeypatch):
-    monkeypatch.delenv("GITHUB_WRITE_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_API", raising=False)
     exporter = make_exporter(tmp_path, dry_run=False)
-    with pytest.raises(RuntimeError, match="GITHUB_WRITE_TOKEN"):
+    with pytest.raises(RuntimeError, match="GITHUB_API token is required for live export"):
         exporter.export(ARTIFACT)
 
 def test_idempotency_key_is_stable_for_same_artifact(tmp_path):

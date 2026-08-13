@@ -45,14 +45,15 @@ class ThreatDragonReader:        #Reads validated threat records out of a Threat
                  cell_data = cell.get("data", {})
                  for threat_index, threat in enumerate(cell_data.get("threats", [])):
                     validate_threat(threat)
-                    threat.append({
+                    threats.append({
                         **threat,
                         "source_location": {
                         "diagram_index": diagram_index,
                         "diagram_title": diagram.get("title", ""),
                         "cell_index": cell_index,
                         "cell_name": cell_data.get("name", ""),
-                        "threat_index": threat_index,}
+                        "threat_index": threat_index,
+                        },
                     })
         return {
              "summary": {

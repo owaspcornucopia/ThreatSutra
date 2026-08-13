@@ -107,15 +107,15 @@ def main():
     print("Loading project data and preparing security analysis...")
     contexts = run_pipeline()
     issue_client = GitHubIssueClient()
-    # Live vs. dry-run is decided by whether GITHUB_WRITE_TOKEN is configured
+    # Live vs. dry-run is decided by whether GITHUB_API is configured
     # (see GitHubIssueExporter) - per Johan's guidance, providing the
     # credentials plus approving an artifact is what makes export happen,
     # not a separate flag.
     exporter = GitHubIssueExporter(repo=GITHUB_REPO)
     if exporter.dry_run:
-        print("\n[DRY RUN] GITHUB_WRITE_TOKEN is not set - approved artifacts will be shown, not exported.")
+        print("\n[DRY RUN] GITHUB_API is not set - approved artifacts will be shown, not exported.")
     else:
-        print("\n[LIVE EXPORT] GITHUB_WRITE_TOKEN is set - approved artifacts will be created as real GitHub issues.")
+        print("\n[LIVE EXPORT] GITHUB_API token is set - approved artifacts will be created as real GitHub issues.")
     for index, context in enumerate(contexts, start=1):
         print_header(f"THREAT {index} of {len(contexts)} (number: {context.threat_number})")
         print(f"Title       : {neutralize_for_display(context.threat_title)}")
