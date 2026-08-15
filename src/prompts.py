@@ -64,7 +64,7 @@ def build_verification_test_prompt(context: AnalysisContext) -> str:
 
 def build_relevance_prompt(context: AnalysisContext, linked_issues: list) -> str:
     """
-    Builds the prompt for Issue #12: score how relevant the threat's linked
+    Builds the prompt for the Issue #12: score how relevant the threat's linked
     GitHub issues are to the current milestone, per the DFD's own threat #8
     mitigation ("an additional request can be made to the AI model... score
     from one to 10... relevance in relation to the milestone").
