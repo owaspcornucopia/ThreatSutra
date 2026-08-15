@@ -47,7 +47,7 @@ class AnalysisContext:
     estimated_tokens: int
 
 def extract_milestone_number(summary_description: str) -> int:
-    #Reads the single GitHub milestone the DFD declares (issue #4/#11).
+    #Reads the single GitHub milestone the DFD declares.
     matches = sorted(set(MILESTONE_URL_PATTERN.findall(summary_description)))
     if len(matches) != 1:
         raise ValidationError(
@@ -56,7 +56,7 @@ def extract_milestone_number(summary_description: str) -> int:
     return int(matches[0])
 
 def select_milestone(milestones: list, milestone_number: int) -> dict:
-    #Selects the DFD-declared milestone from the fetched list, or fails closed (issue #4).
+    #Selects the DFD-declared milestone from the fetched list, or fails closed if it isn't found.
     for milestone in milestones:
         if milestone.get("number") == milestone_number:
             return milestone
@@ -67,7 +67,8 @@ def select_milestone(milestones: list, milestone_number: int) -> dict:
 
 def _linked_issue_urls(description: str) -> Tuple[str, ...]:
     """Keeps linked GitHub Issue URLs as traceability/provenance only - their bodies are
-    not fetched. Full issue-content retrieval and relevance screening belong to issue #12."""
+    not fetched. Full issue-content retrieval and relevance screening happen separately, in the 
+    relevance-scoring stage (src/relevance.py)."""
     return tuple(dict.fromkeys(ISSUE_URL_PATTERN.findall(description)))
 
 def _provenance(source: dict, version: str = "") -> SourceProvenance:

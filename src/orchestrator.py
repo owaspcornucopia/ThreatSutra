@@ -89,7 +89,7 @@ def call_ai_model(prompt: str) -> str:     #Sends a prompt to the Gemini model a
     return response.text.strip()
 
 def generate_evil_user_story(context: AnalysisContext) -> dict:
-    """Issue #6: generates a validated, traceable evil-user-story artifact from an AnalysisContext."""
+    """ Generates a validated, traceable evil-user-story artifact from an AnalysisContext. """
     prompt = build_evil_user_story_prompt(context)
     raw_response = call_ai_model(prompt)
     story = extract_model_text_field(raw_response, "evil_user_story")
@@ -109,7 +109,7 @@ def generate_evil_user_story(context: AnalysisContext) -> dict:
     }
 
 def generate_verification_test(context: AnalysisContext) -> dict:
-    """Issue #5: generates a validated, traceable verification-test artifact from an AnalysisContext."""
+    """Generates a validated, traceable verification-test artifact from an AnalysisContext."""
     prompt = build_verification_test_prompt(context)
     raw_response = call_ai_model(prompt)
     verification_test = extract_model_text_field(raw_response, "verification_test")
@@ -137,8 +137,7 @@ def process_threat(
     milestone_provenance: dict,) -> AnalysisContext:
     """
     Processes exactly one Threat Dragon threat: resolves its Cornucopia edition, finds the matching
-   card plus its explanation content, and builds one validated, traceable AnalysisContext (Issue #11).
-   No LLM calls here - see generate_evil_user_story / generate_verification_test.
+    card plus its explanation content, and builds one validated, traceable AnalysisContext."
     """
     edition = resolve_edition(threat)
     card = cornucopia_client.find_card(edition, threat.get("cardNumber"))
@@ -154,9 +153,8 @@ def process_threat(
 
 def run_pipeline() -> list:
     """
-    Builds one normalized, validated AnalysisContext per Threat Dragon threat (Issue #11),
-    using the single GitHub milestone the DFD declares (Issue #4). Generation (#5/#6) and
-    review/persistence (#7) are separate steps that consume this list.
+    Builds one normalized, validated AnalysisContext per Threat Dragon threat, using the single GitHub milestone the DFD declares. 
+    Generation and review/persistence are separate steps that consume this list.
     """
     threat_source = ThreatDragonReader().read_threat_source()
     milestone_client = GitHubMilestoneClient(GITHUB_REPO)

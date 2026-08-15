@@ -31,9 +31,8 @@ class GitHubMilestoneClient:
 
     def get_milestones(self, state: str = "open") -> list:
         """
-        Returns every matching milestone, paginated and validated. Issue #4: milestone data is
-        required context for generation, so failures now raise instead of silently returning [] -
-        a missing milestone must stop the pipeline with a clear error, not continue with empty context.
+        Returns every matching milestone, paginated and validated. Milestone data is required context for generation, so failures raise 
+        instead of silently returning [] — a missing milestone must stop the pipeline with a clear error, not continue with empty context."
         """
         url = f"https://api.github.com/repos/{self.repo}/milestones"
         headers = {"Accept": "application/vnd.github+json"}
@@ -67,7 +66,7 @@ class GitHubMilestoneClient:
         return milestones
 
     def get_provenance(self) -> dict:
-        """Returns provenance after get_milestones() has completed. Used by #11."""
+        """Returns provenance after get_milestones() has completed. Raises if called before get_milestones()."""
         if self._provenance is None:
             raise RuntimeError("Milestone provenance is unavailable before fetching milestones.")
         return dict(self._provenance)    

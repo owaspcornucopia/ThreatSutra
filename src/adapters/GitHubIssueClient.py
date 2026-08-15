@@ -1,5 +1,5 @@
 """
-Fetches GitHub issues linked to a threat.For relevance scoring (Issue #12), the system must analyze the actual
+Fetches GitHub issues linked to a threat.For relevance scoring, the system must analyze the actual
 linked GitHub issues, not just the threat and card data.
 This client fetches only the required data (title and body) from each issue
 to support that analysis. It does not fetch comments or extra metadata.

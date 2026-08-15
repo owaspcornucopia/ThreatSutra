@@ -1,7 +1,7 @@
 """
-Command-line interface for ThreatSutra: This module is the entry point for running the ThreatSutra pipeline. It runs the orchestrator, generates artifacts for each threat, presents
-them to a human reviewer alongside source traceability and a relevance assessment (issues #7, #12), and - only for approved artifacts - exports
-them to GitHub (issue #8).
+Command-line interface for ThreatSutra: This module is the entry point for running the ThreatSutra pipeline.
+It runs the orchestrator, generates artifacts for each threat, presents them to a human reviewer alongside 
+source traceability and a relevance assessment, and — only for approved artifacts — exports them to GitHub.
 """
 import argparse
 import json
@@ -44,15 +44,15 @@ def edit_text(label: str, current_text: str) -> str:
     return new_text if new_text else current_text
 
 def revalidate_edit(artifact_type: str, text: str) -> str:
-    """Issue #7: edited text is untrusted input from the terminal and must be
-    revalidated against the same format contract as model output."""
+    """ Edited text is untrusted terminal input and must be revalidated against the same format contract as model output."""
     if artifact_type == "evil_user_story":
         return validate_evil_user_story(text)
     return validate_verification_test(text)
 
 def save_output(context, artifact: dict, relevance, decision: str) -> str:
-    """Saves the reviewer's decision to outputs/ as a JSON file with an audit-safe timestamp, including relevance, source provenance, and model/template version
-    so the audit trail required by issues #7/#11/#12 isn't lost after review."""
+    """Saves the reviewer's decision to outputs/ as a JSON file with an audit-safe timestamp, including relevance, source provenance, 
+    and model/template version so the audit trail (decision, provenance, relevance, model/template version) survives after review.
+    """
     project_root = os.path.dirname(os.path.dirname(__file__))
     output_dir = os.path.join(project_root, "outputs")
     os.makedirs(output_dir, exist_ok=True)

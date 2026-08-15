@@ -178,9 +178,8 @@ def validate_threat_dragon_document(model: dict) -> dict:       #Validates the o
 
 def validate_cornucopia_response(payload: dict) -> dict:
     """
-    Validates the complete Cornucopia API response envelope before any card is cached. Issue #3: field-level validate_card() alone is not enough
-    because the envelope (meta + standards list) was never checked.
-   """
+    Validates the complete Cornucopia API response envelope before any card 
+    is cached because the envelope (meta + standards list) isn't covered by per-card validation alone. """
     _require_mapping(payload, "Cornucopia API response")
     meta = payload.get("meta")
     _require_mapping(meta, "Cornucopia API response metadata")
@@ -222,7 +221,7 @@ def validate_context_budget(text_fields: dict) -> int:
     return estimated_tokens
 
 def validate_evil_user_story(text: str) -> str:
-    """Validates one generated evil user story (Issue #6) before review."""
+    """Validates one generated evil user story before review."""
     _validate_text(text, "evil_user_story", "LLM output")
     if "\n" in text or "\r" in text:
         _fail("LLM output", "evil_user_story must be one line.")
@@ -231,7 +230,7 @@ def validate_evil_user_story(text: str) -> str:
     return text.strip()
 
 def validate_verification_test(text: str) -> str:
-    """Validates one generated Given/When/Then verification test (Issue #5)."""
+    """Validates one generated Given/When/Then verification test before review."""
     _validate_text(text, "verification_test", "LLM output")
     if "\n" in text or "\r" in text:
         _fail("LLM output", "verification_test must be one line.")
@@ -241,8 +240,7 @@ def validate_verification_test(text: str) -> str:
 
 def extract_model_text_field(response_text: str, field: str) -> str:
     """
-    Extracts one required field from a JSON-only model response (Issue #10:
-    structured output validation instead of interpolating raw model text).
+    enforces structured JSON output instead of interpolating raw model text (defense against malformed/injected output)."
     """
     _validate_text(response_text, "response_text", "LLM output")
     response_text = response_text.strip()

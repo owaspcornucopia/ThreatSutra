@@ -1,13 +1,9 @@
 """
 Fetches and extracts detailed Cornucopia card content.
 The Cornucopia API only gives basic info like ID and description.
-But for generation (issues #5, #6, #11), we also need:
-- Scenario
-- What can go wrong
-- Mitigation / requirement
-This data exists only in each card’s explanation.md in the Cornucopia repo.
-So this adapter fetches that file, extracts only the needed sections,
-and returns clean structured data (not raw Markdown).
+But generation also needs: Scenario / What can go wrong / Mitigation / requirement. 
+This data exists only in each card's explanation.md in the Cornucopia repo.
+So this adapter fetches that file, extracts only the needed sections, and returns clean structured data (not raw Markdown).
 """
 import hashlib
 import re

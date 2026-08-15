@@ -24,8 +24,8 @@ class RelevanceAssessment:
 
 def assess_relevance(context: AnalysisContext, call_ai_model, issue_client: GitHubIssueClient = None) -> RelevanceAssessment:
     """
-    Fetches the threat's linked GitHub issues and scores their relevance to the milestone. `call_ai_model` is injected (rather than imported from
-    orchestrator) to avoid a circular import and to keep this testable without a live model call (Issue #13).
+    Fetches the threat's linked GitHub issues and scores their relevance to the milestone. `call_ai_model` is 
+    injected (rather than imported from orchestrator) to avoid a circular import and to keep this testable without a live model call.
     """
     issue_client = issue_client or GitHubIssueClient()
     linked_issues = issue_client.get_issues(context.linked_issue_urls)
