@@ -3,6 +3,11 @@ we can tweak wording without touching the logic that calls the AI.
 """
 import json
 from src.context import AnalysisContext
+"""
+ Bump whenever prompt wording changes materially - persisted in review
+ records/export markers. so, past artifacts stay traceable to the exact template that produced them.
+"""
+PROMPT_TEMPLATE_VERSION = "1.0"
 
 def _untrusted_data_block(label: str, value: str) -> str:
      """
@@ -17,7 +22,7 @@ def _untrusted_data_block(label: str, value: str) -> str:
 
 def build_evil_user_story_prompt(context: AnalysisContext) -> str:
     """
-    Builds the prompt for Issue #6: generate an evil user story from the threat description, the mapped card's scenario, 
+    Generates an evil user story from the threat description, the mapped card's scenario, 
     and its "what can go wrong" content.
     """
     prompt = (

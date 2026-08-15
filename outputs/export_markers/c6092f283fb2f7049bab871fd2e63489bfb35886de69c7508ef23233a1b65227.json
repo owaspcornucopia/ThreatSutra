@@ -1,0 +1,8 @@
+{
+  "idempotency_key": "c6092f283fb2f7049bab871fd2e63489bfb35886de69c7508ef23233a1b65227",
+  "artifact_type": "evil_user_story",
+  "source_threat_id": "b95bf6e0-a923-40ee-b9f6-87ac1846e975",
+  "source_card_id": "LLM9",
+  "github_issue_number": 14,
+  "github_issue_url": "https://github.com/owaspcornucopia/ThreatSutra/issues/14"
+}

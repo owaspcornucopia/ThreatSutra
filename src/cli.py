@@ -3,14 +3,18 @@ Command-line interface for ThreatSutra: This module is the entry point for runni
 them to a human reviewer alongside source traceability and a relevance assessment (issues #7, #12), and - only for approved artifacts - exports
 them to GitHub (issue #8).
 """
+import argparse
 import json
+import logging
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from src.adapters.GitHubIssueClient import GitHubIssueClient
 from src.adapters.GitHubIssueExporter import GitHubIssueExporter
 from src.orchestrator import (
     GITHUB_REPO,
+    GeminiServiceError,
     call_ai_model,
     generate_evil_user_story,
     generate_verification_test,
@@ -46,7 +50,9 @@ def revalidate_edit(artifact_type: str, text: str) -> str:
         return validate_evil_user_story(text)
     return validate_verification_test(text)
 
-def save_output(artifact: dict, decision: str) -> None:    #Saves reviewer's decision to outputs/ as a JSON file with an audit-safe timestamp.
+def save_output(context, artifact: dict, relevance, decision: str) -> str:
+    """Saves the reviewer's decision to outputs/ as a JSON file with an audit-safe timestamp, including relevance, source provenance, and model/template version
+    so the audit trail required by issues #7/#11/#12 isn't lost after review."""
     project_root = os.path.dirname(os.path.dirname(__file__))
     output_dir = os.path.join(project_root, "outputs")
     os.makedirs(output_dir, exist_ok=True)
@@ -61,6 +67,18 @@ def save_output(artifact: dict, decision: str) -> None:    #Saves reviewer's dec
         "source_threat_id": artifact["source_threat_id"],
         "source_card_id": artifact["source_card_id"],
         "source_milestone_number": artifact["source_milestone_number"],
+        "model": artifact.get("model"),
+        "prompt_template_version": artifact.get("prompt_template_version"),
+        "relevance": {
+            "score": relevance.score,
+            "color": relevance.color,
+            "explanation": relevance.explanation,
+            "assessed_issue_urls": list(relevance.assessed_issue_urls),
+        },
+        "provenance": [
+            {"source_type": p.source_type, "location": p.location, "content_hash": p.content_hash, "version": p.version}
+            for p in context.provenance
+        ],
     }
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(output_data, f, indent=4, ensure_ascii=False)
@@ -74,9 +92,9 @@ def print_relevance(assessment) -> None:
     if assessment.assessed_issue_urls:
         print(f"From issues : {', '.join(assessment.assessed_issue_urls)}")
 
-def review_artifact(context, artifact: dict, exporter: GitHubIssueExporter) -> None:
-    """Issue #7: presents one generated artifact plus traceability and relevance
-    context, collects a decision, and - only on approval - exports it (issue #8)."""
+def review_artifact(context, artifact: dict, relevance, exporter: GitHubIssueExporter) -> None:
+    """presents one generated artifact plus traceability and relevance
+    context, collects a decision, and - only on approval - exports it."""
     label = "Evil user story" if artifact["artifact_type"] == "evil_user_story" else "Verification test"
     print(f"\n{label}:\n{neutralize_for_display(artifact['text'])}")
     print(f"\nSource threat : {context.threat_id} (#{context.threat_number})")
@@ -91,26 +109,35 @@ def review_artifact(context, artifact: dict, exporter: GitHubIssueExporter) -> N
         except ValidationError as exc:
             print(f"\nEdited text was rejected: {exc}\nTreating as 'reject'.")
             decision = "reject"
-    save_output(artifact, decision)
+    output_path = save_output(context, artifact, relevance, decision)
     if decision != "approve":
         return
-    result = exporter.export(artifact)
+    with open(output_path, "r", encoding="utf-8") as f:
+        review_record = json.load(f)
+    result = exporter.export(review_record)
     if result["status"] == "dry_run":
         print(f"\n[DRY RUN] Would create GitHub issue:\nTitle: {result['title']}")
     elif result["status"] == "already_exported":
-       print(f"\nAlready exported as {result['marker'].get('github_issue_url')}")
+        print(f"\nAlready exported as {result['marker'].get('github_issue_url')}")
     else:
         print(f"\nExported as {result['marker'].get('github_issue_url')}")
 
 def main():
+    parser = argparse.ArgumentParser(description="ThreatSutra security analysis pipeline.")
+    parser.add_argument("--debug", action="store_true", help="Enable DEBUG-level logging for diagnostic output.")
+    args = parser.parse_args()
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.WARNING,
+        format="%(name)s %(levelname)s: %(message)s",
+    )
     print_header("ThreatSutra")
     print("Loading project data and preparing security analysis...")
-    contexts = run_pipeline()
+    try:
+        contexts = run_pipeline()
+    except GeminiServiceError as exc:
+        print(f"\nError: {exc}", file=sys.stderr)
+        sys.exit(1)
     issue_client = GitHubIssueClient()
-    # Live vs. dry-run is decided by whether GITHUB_API is configured
-    # (see GitHubIssueExporter) - per Johan's guidance, providing the
-    # credentials plus approving an artifact is what makes export happen,
-    # not a separate flag.
     exporter = GitHubIssueExporter(repo=GITHUB_REPO)
     if exporter.dry_run:
         print("\n[DRY RUN] GITHUB_API is not set - approved artifacts will be shown, not exported.")
@@ -119,10 +146,14 @@ def main():
     for index, context in enumerate(contexts, start=1):
         print_header(f"THREAT {index} of {len(contexts)} (number: {context.threat_number})")
         print(f"Title       : {neutralize_for_display(context.threat_title)}")
-        relevance = assess_relevance(context, call_ai_model, issue_client)
-        print_relevance(relevance)
-        review_artifact(context, generate_evil_user_story(context), exporter)
-        review_artifact(context, generate_verification_test(context), exporter)
+        try:
+            relevance = assess_relevance(context, call_ai_model, issue_client)
+            print_relevance(relevance)
+            review_artifact(context, generate_evil_user_story(context), relevance, exporter)
+            review_artifact(context, generate_verification_test(context), relevance, exporter)
+        except GeminiServiceError as exc:
+            print(f"\nError: {exc}", file=sys.stderr)
+            sys.exit(1)
     print_header("Analysis Complete")
     print(f"Successfully processed {len(contexts)} threat(s).")
 

@@ -3,6 +3,3 @@ __pycache__/
 *.pyc
 .vscode/
 .env
-outputs/*
-!outputs/.gitkeep
-=8.0.0

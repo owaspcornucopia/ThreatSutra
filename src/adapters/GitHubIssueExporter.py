@@ -9,7 +9,7 @@ from pathlib import Path
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from src.validation import sanitize_text, validate_export_artifact
+from src.validation import sanitize_text, validate_export_artifact, validate_review_record 
 
 DEFAULT_TIMEOUT_SECONDS = 10
 RETRY_TOTAL = 3
@@ -73,11 +73,20 @@ class GitHubIssueExporter:
         )
         return title, body
 
-    def export(self, artifact: dict) -> dict:
+    def export(self, review_record: dict) -> dict:
         """
-        Exports one approved artifact. Returns a result dict describing what happened (dry_run / already_exported / created) - never raises for
-        the "already exported" case, since that is the expected idempotent path.
+        Exports one artifact from its persisted review record. Note that:the exporter validates the record and independently checks
+        decision == 'approve' itself, rather than trusting its caller. Returns a result dict describing what happened (dry_run /
+        already_exported / created) - never raises for the "already exported" case, since that is the expected idempotent path.
         """
+        validate_review_record(review_record)
+        artifact = {
+            "artifact_type": review_record["artifact_type"],
+            "text": review_record["text"],
+            "source_threat_id": review_record["source_threat_id"],
+            "source_card_id": review_record["source_card_id"],
+            "source_milestone_number": review_record["source_milestone_number"],
+        }
         validate_export_artifact(artifact)
         key = self._idempotency_key(artifact)
         marker_path = self._marker_path(key)
@@ -88,7 +97,8 @@ class GitHubIssueExporter:
             return {"status": "dry_run", "title": title, "body": body}
         if not self.token:
             raise RuntimeError(
-                "GITHUB_API token is required for live export (see .env.example).")
+                "GITHUB_API token is required for live export (see .env.example)."
+            )
         url = f"https://api.github.com/repos/{self.repo}/issues"
         headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {self.token}"}
         try:
@@ -104,6 +114,10 @@ class GitHubIssueExporter:
             "source_card_id": artifact["source_card_id"],
             "github_issue_number": created.get("number"),
             "github_issue_url": created.get("html_url"),
+            "model": review_record.get("model"),
+            "prompt_template_version": review_record.get("prompt_template_version"),
+            "relevance": review_record.get("relevance"),
+            "provenance": review_record.get("provenance"),
         }
         marker_path.write_text(json.dumps(marker, indent=2))
         return {"status": "created", "marker": marker}

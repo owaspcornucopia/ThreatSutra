@@ -1,0 +1,46 @@
+{
+    "timestamp": "2026-08-14T14:56:13.575401+00:00",
+    "decision": "approve",
+    "artifact_type": "verification_test",
+    "text": "Given an LLM application is deployed with active prompt injection defenses and AI-specific attack pattern detection and logging enabled, When a user submits a prompt containing a known prompt injection payload designed to bypass system instructions or extract sensitive information, Then the LLM application either rejects the prompt, sanitizes it to prevent the injection, or the security monitoring system detects the prompt injection attempt, logs a high-severity alert, and the LLM's intended behavior remains secure without divulging sensitive data or executing unauthorized actions.",
+    "source_threat_id": "b95bf6e0-a923-40ee-b9f6-87ac1846e975",
+    "source_card_id": "LLM9",
+    "source_milestone_number": 1,
+    "model": "gemini-2.5-flash",
+    "prompt_template_version": "1.0",
+    "relevance": {
+        "score": 10,
+        "color": "green",
+        "explanation": "The threat and its linked issues are directly relevant as they describe the development of AI-assisted test and work item generation, which is the core objective of the milestone.",
+        "assessed_issue_urls": [
+            "https://github.com/owaspcornucopia/ThreatSutra/issues/5",
+            "https://github.com/owaspcornucopia/ThreatSutra/issues/6"
+        ]
+    },
+    "provenance": [
+        {
+            "source_type": "threat_dragon",
+            "location": "/home/mahaboobunnisa/projects/ThreatSutra/ThreatDragonModels/DFD_ThreatSutra.json",
+            "content_hash": "26c02039e5129b98adae67679928d7b3d5b5f5b161a07faed3022b158e2acc6a",
+            "version": ""
+        },
+        {
+            "source_type": "cornucopia_api",
+            "location": "https://cornucopia.owasp.org/api/cre/companion/en",
+            "content_hash": "00f8add3e1b02a0e4032277a096783eb556cf2cec870cb8c16d30e32c0c203b9",
+            "version": "1.0"
+        },
+        {
+            "source_type": "cornucopia_explanation",
+            "location": "https://raw.githubusercontent.com/OWASP/cornucopia/a78836eab9a34be9fb90679bdff427ca45b21daa/cornucopia.owasp.org/data/cards/companion-cards-1.0-en/large-language-models/LLM9/explanation.md",
+            "content_hash": "21e66dc571934ce8d3b4f631170d18091f5eb26b4c6ba0c55a8e66494fdf75f8",
+            "version": "a78836eab9a34be9fb90679bdff427ca45b21daa"
+        },
+        {
+            "source_type": "github_milestones",
+            "location": "https://api.github.com/repos/owaspcornucopia/ThreatSutra/milestones?state=open",
+            "content_hash": "3bb8adeed10571741dcb4630654410c1138402ce3f6bcbcc52ef571d4939fd02",
+            "version": ""
+        }
+    ]
+}

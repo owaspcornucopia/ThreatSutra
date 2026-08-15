@@ -11,18 +11,13 @@ Additional validation rules (such as required fields, character restrictions, le
 import json
 import re
 MAX_FIELD_LENGTH = 6000        
-"""per text field - raised from 4000: the tracked DFD's. 
-   issue #10 threat mitigation (the AISVS allow-list regex) is a legitimate 4291 chars and was failing validation."""
-MAX_TOTAL_LENGTH = 20000       # all text fields of one object combined
-MAX_LIST_LENGTH = 500          # threats / milestones accepted from one source
+MAX_TOTAL_LENGTH = 20000       
+MAX_LIST_LENGTH = 500          
 REQUIRED_THREAT_FIELDS = ("id", "type", "cardNumber", "title", "description", "mitigation")
 REQUIRED_CARD_FIELDS = ("sectionID", "name", "description")
 REQUIRED_MILESTONE_FIELDS = ("number", "title")
 OPTIONAL_CARD_TEXT_FIELDS = ("doctype", "id", "section", "hyperlink", "tooltype")
 OPTIONAL_MILESTONE_TEXT_FIELDS = ("description", "state", "html_url")
-""" Issue #10 (extended) / #11 support: document-level schemas, context token
- budget, and generated-output validation. Field-level validators above are
- unchanged and still used by these."""
 MAX_CONTEXT_TOKENS = 3000
 CHARS_PER_TOKEN_ESTIMATE = 3
 REQUIRED_EXPLANATION_FIELDS = ("scenario", "what_can_go_wrong", "requirement", "mitigation")
@@ -151,19 +146,12 @@ def validate_milestones(milestones: list) -> list:
             raise ValidationError(f"Milestone at position {index}: {exc}") from exc
     return milestones
 
-def validate_threat_dragon_document(model: dict) -> dict:
-    """
-   Validates the outer Threat Dragon document before it is traversed.
-    Issue #2/#9: the document itself is untrusted and must be schema-checked
-    before any diagram/cell/threat is read out of it.
-    """
+def validate_threat_dragon_document(model: dict) -> dict:       #Validates the outer Threat Dragon document before it is traversed.
     _require_mapping(model, "Threat Dragon document")
-
     summary = model.get("summary")
     _require_mapping(summary, "Threat Dragon document summary")
     _validate_text(summary.get("title"), "title", "Threat Dragon document summary")
     _validate_text(summary.get("description"), "description", "Threat Dragon document summary")
-
     detail = model.get("detail")
     _require_mapping(detail, "Threat Dragon document detail")
     diagrams = detail.get("diagrams")
@@ -190,8 +178,7 @@ def validate_threat_dragon_document(model: dict) -> dict:
 
 def validate_cornucopia_response(payload: dict) -> dict:
     """
-    Validates the complete Cornucopia API response envelope before any card
-    is cached. Issue #3: field-level validate_card() alone is not enough
+    Validates the complete Cornucopia API response envelope before any card is cached. Issue #3: field-level validate_card() alone is not enough
     because the envelope (meta + standards list) was never checked.
    """
     _require_mapping(payload, "Cornucopia API response")
@@ -211,9 +198,7 @@ def validate_cornucopia_response(payload: dict) -> dict:
 def validate_explanation_sections(sections: dict) -> dict:
     """
     Validates the selected, parsed Cornucopia card explanation sections
-    (scenario / what_can_go_wrong / requirement / mitigation) used by
-    Issues #5, #6, and #11. Only the extracted sections are validated -
-    raw Markdown is never retained past parsing.
+    (scenario / what_can_go_wrong / requirement / mitigation)
     """
     _require_mapping(sections, "Cornucopia card explanation")
     total = 0
@@ -224,9 +209,8 @@ def validate_explanation_sections(sections: dict) -> dict:
 
 def validate_context_budget(text_fields: dict) -> int:
     """
-    Validates every text value being admitted to AnalysisContext (Issue #11)
-    and returns a conservative token estimate, enforcing the Issue #10
-    token-budget requirement that was previously missing entirely.
+    Validates every text value in the AnalysisContext and returns the estimated token count. 
+    Raises ValidationError if any field is invalid or the total exceeds the token limit.
     """
     _require_mapping(text_fields, "AnalysisContext text fields")
     total_characters = 0
@@ -277,7 +261,7 @@ RELEVANCE_COLORS = {"green": (8, 10), "yellow": (5, 7), "red": (1, 4)}
 MAX_ISSUE_BODY_LENGTH = 4000
 """
 Strips ANSI/terminal control sequences and other C0/C1 control characters
-before anything untrusted is ever printed to a terminal (issue #7). """
+before anything untrusted is ever printed to a terminal. """
 _CONTROL_SEQUENCE_PATTERN = re.compile(
     r"\x1b\[[0-?]*[ -/]*[@-~]"   # CSI (colors, cursor movement, etc.)
     r"|\x1b\][^\x07\x1b]*(\x07|\x1b\\)"  # OSC (title/hyperlink injection)
@@ -285,14 +269,14 @@ _CONTROL_SEQUENCE_PATTERN = re.compile(
 )
 
 def relevance_color_for_score(score: int) -> str:
-    """Maps a 1-10 relevance score to the DFD's green/yellow/red convention (issue #12)."""
+    """Maps a 1-10 relevance score to the DFD's green/yellow/red convention."""
     for color, (low, high) in RELEVANCE_COLORS.items():
         if low <= score <= high:
             return color
     _fail("relevance_score", f"score {score} is outside the 1-10 range.")
 
 def validate_relevance_assessment(payload: dict) -> dict:
-    """Validates one generated relevance assessment before it reaches the reviewer (issue #12)."""
+    """Validates one generated relevance assessment before it reaches the reviewer."""
     _require_mapping(payload, "relevance assessment")
     score = payload.get("score")
     if not isinstance(score, int) or isinstance(score, bool) or not (1 <= score <= 10):
@@ -303,7 +287,7 @@ def validate_relevance_assessment(payload: dict) -> dict:
     return payload
 
 def validate_github_issue_reference(issue: dict) -> dict:
-    """Validates one fetched linked GitHub issue's title/body before it is used as relevance input (issue #12)."""
+    """Validates one fetched linked GitHub issue's title/body before it is used as relevance input."""
     _require_mapping(issue, "linked GitHub issue")
     for field in ("number", "title", "body"):
         if field not in issue:
@@ -316,9 +300,8 @@ def validate_github_issue_reference(issue: dict) -> dict:
 
 def neutralize_for_display(text: str) -> str:
     """
-    Strips terminal control sequences from untrusted text before it is ever
-    printed to the reviewer's terminal (issue #7). This is display-safety
-    only - it does not replace sanitize_text()/validation for storage or export.
+    Strips terminal control sequences from untrusted text before it is ever printed to the reviewer's terminal. 
+    This is display-safety only - it does not replace sanitize_text()/validation for storage or export.
     """
     if text is None:
         return ""
@@ -326,9 +309,8 @@ def neutralize_for_display(text: str) -> str:
 
 def validate_export_artifact(artifact: dict) -> dict:
     """
-    Validates one reviewer-approved artifact immediately before GitHub export
-    (issue #8) - export must only ever see a structured, already-validated
-    artifact, never free-form or unapproved text.
+    Validates one reviewer-approved artifact immediately before GitHub export.
+    Export must only ever see a structured, already-validated artifact, never free-form or unapproved text.
     """
     _require_mapping(artifact, "export artifact")
     for field in ("artifact_type", "text", "source_threat_id", "source_card_id", "source_milestone_number"):
@@ -339,11 +321,27 @@ def validate_export_artifact(artifact: dict) -> dict:
     _validate_text(artifact["text"], "text", "export artifact")
     return artifact
 
+def validate_review_record(record: dict) -> dict:
+    """
+    Validates a persisted review record before export: export must independently prove a reviewer decision of 'approve' was actually
+    saved to disk, not merely trust an in-memory flag from its caller.
+    """
+    _require_mapping(record, "review record")
+    for field in ("decision", "artifact_type", "text", "source_threat_id",
+                  "source_card_id", "source_milestone_number", "timestamp"):
+        if field not in record:
+            _fail("review record", f"missing required field '{field}'.")
+    if record["decision"] != "approve":
+        _fail("review record", f"decision must be 'approve', got '{record['decision']}'.")
+    if record["artifact_type"] not in ("evil_user_story", "verification_test"):
+        _fail("review record", "artifact_type must be evil_user_story or verification_test.")
+    _validate_text(record["text"], "text", "review record")
+    return record
+
 def extract_model_json_fields(response_text: str, fields: tuple) -> dict:
     """
     Extracts a fixed set of required fields from a JSON-only model response.
-    Generalizes extract_model_text_field() for outputs with more than one
-    field (issue #12's relevance assessment: score + explanation).
+    Generalizes extract_model_text_field() for outputs with more than one field.
     """
     _validate_text(response_text, "response_text", "LLM output")
     response_text = response_text.strip()

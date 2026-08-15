@@ -20,13 +20,17 @@ from src.validation import validate_explanation_sections
 
 REPOSITORY = "OWASP/cornucopia"
 BRANCH = "master"
-API_BASE_URL = f"https://api.github.com/repos/{REPOSITORY}"
-RAW_BASE_URL = f"https://raw.githubusercontent.com/{REPOSITORY}/{BRANCH}"
+PINNED_COMMIT_SHA = "a78836eab9a34be9fb90679bdff427ca45b21daa"
+"""
+pinned to a fixed commit instead of the mutable "master" branch so upstream heading/path changes can't silently alter generated security
+content. Bump this deliberately (and re-run the parser tests) to refresh it. """
 REQUEST_TIMEOUT_SECONDS = 10
 RETRY_TOTAL = 3
 RETRY_BACKOFF_FACTOR = 0.5
 RETRY_STATUS_CODES = (429, 500, 502, 503, 504)
 MAX_REPOSITORY_TREE_ENTRIES = 100000
+API_BASE_URL = f"https://api.github.com/repos/{REPOSITORY}"
+RAW_BASE_URL = f"https://raw.githubusercontent.com/{REPOSITORY}/{PINNED_COMMIT_SHA}"
 
 # Confirmed edition -> repository directory mapping (webapp confirmed via
 # public source; companion confirmed via mentor-provided screenshot in the
@@ -57,7 +61,7 @@ class CornucopiaExplanationClient:
         locate each card's explanation.md without guessing folder-slug conventions."""
         if self._tree is not None:
             return self._tree
-        url = f"{API_BASE_URL}/git/trees/{BRANCH}?recursive=1"
+        url = f"{API_BASE_URL}/git/trees/{PINNED_COMMIT_SHA}?recursive=1"
         try:
             response = self.session.get(url, timeout=self.timeout)
             response.raise_for_status()
@@ -148,6 +152,7 @@ class CornucopiaExplanationClient:
                 "location": url,
                 "retrieved_at": datetime.now(timezone.utc).isoformat(),
                 "content_hash": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+                "version": PINNED_COMMIT_SHA,
                 "source_heading": "What are we going to do about it?",
             },
         }

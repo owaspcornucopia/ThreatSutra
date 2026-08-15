@@ -128,7 +128,7 @@ def build_analysis_context(
         provenance=(
             _provenance(threat_provenance),
             _provenance(card_provenance, card_provenance.get("api_version", "")),
-            _provenance(explanation["provenance"]),
+            _provenance(explanation["provenance"], explanation["provenance"].get("version", "")),
             _provenance(milestone_provenance),
         ),
         estimated_tokens=estimated_tokens,
