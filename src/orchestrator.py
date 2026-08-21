@@ -151,18 +151,19 @@ def process_threat(
         milestone=milestone,
         milestone_provenance=milestone_provenance,)
 
-def run_pipeline() -> list:
+def run_pipeline(reader=None,milestone_client=None,cornucopia_client=None,explanation_client=None,) -> list:
     """
     Builds one normalized, validated AnalysisContext per Threat Dragon threat, using the single GitHub milestone the DFD declares. 
     Generation and review/persistence are separate steps that consume this list.
     """
-    threat_source = ThreatDragonReader().read_threat_source()
-    milestone_client = GitHubMilestoneClient(GITHUB_REPO)
+    reader = reader or ThreatDragonReader()
+    milestone_client = milestone_client or GitHubMilestoneClient(GITHUB_REPO)
+    threat_source = reader.read_threat_source()
     milestones = milestone_client.get_milestones()
     milestone_number = extract_milestone_number(threat_source["summary"]["description"])
     selected_milestone = select_milestone(milestones, milestone_number)
-    cornucopia_client = CornucopiaClient()
-    explanation_client = CornucopiaExplanationClient()
+    cornucopia_client = cornucopia_client or CornucopiaClient()
+    explanation_client = explanation_client or CornucopiaExplanationClient()
     return [
         process_threat(
             threat=threat,

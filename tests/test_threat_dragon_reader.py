@@ -49,3 +49,36 @@ def test_extract_milestone_number_requires_exactly_one_url():
             "https://github.com/owaspcornucopia/ThreatSutra/milestone/1 "
             "https://github.com/owaspcornucopia/ThreatSutra/milestone/2"
         )
+
+def test_read_threats_returns_threat_list():
+    """Line 74: read_threats() returns just the threats list."""
+    reader = ThreatDragonReader()
+    threats = reader.read_threats()
+    assert isinstance(threats, list)
+    assert len(threats) > 0
+
+def test_os_error_reading_model(tmp_path):
+    """Lines 33-34: OSError when reading the file."""
+    from unittest.mock import patch
+    real_file = tmp_path / "model.json"
+    real_file.write_text("{}")
+    reader = ThreatDragonReader(str(real_file))
+    with patch("builtins.open", side_effect=OSError("Permission denied")):
+        with pytest.raises(RuntimeError, match="Could not read"):
+            reader.read_threat_source()
+
+def test_unicode_decode_error(tmp_path):
+    """Lines 37-38: UnicodeDecodeError from non-UTF-8 file."""
+    bad_file = tmp_path / "model.json"
+    bad_file.write_bytes(b'\xff\xfe' + b'\x00' * 10)
+    reader = ThreatDragonReader(str(bad_file))
+    with pytest.raises(RuntimeError, match="not UTF-8"):
+        reader.read_threat_source()
+
+def test_json_decode_error(tmp_path):
+    """Lines 39-40: JSONDecodeError from invalid JSON file."""
+    bad_file = tmp_path / "model.json"
+    bad_file.write_text("this is not valid json at all", encoding="utf-8")
+    reader = ThreatDragonReader(str(bad_file))
+    with pytest.raises(RuntimeError, match="not valid JSON"):
+        reader.read_threat_source()

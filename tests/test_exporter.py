@@ -50,18 +50,18 @@ def test_live_export_without_token_raises(tmp_path, monkeypatch):
 
 def test_idempotency_key_is_stable_for_same_artifact(tmp_path):
     exporter = make_exporter(tmp_path)
-    key_a = exporter._idempotency_key(ARTIFACT)
-    key_b = exporter._idempotency_key(dict(ARTIFACT))
+    key_a = exporter._idempotency_key(REVIEW_RECORD)
+    key_b = exporter._idempotency_key(dict(REVIEW_RECORD))
     assert key_a == key_b
 
 def test_idempotency_key_differs_for_different_threats(tmp_path):
     exporter = make_exporter(tmp_path)
-    other = {**ARTIFACT, "source_threat_id": "threat-2"}
-    assert exporter._idempotency_key(ARTIFACT) != exporter._idempotency_key(other)
+    other = {**REVIEW_RECORD, "source_threat_id": "threat-2"}
+    assert exporter._idempotency_key(REVIEW_RECORD) != exporter._idempotency_key(other)
 
 def test_already_exported_marker_short_circuits(tmp_path):
     exporter = make_exporter(tmp_path, dry_run=True)
-    key = exporter._idempotency_key(ARTIFACT)
+    key = exporter._idempotency_key(REVIEW_RECORD)
     marker_path = exporter._marker_path(key)
     marker_path.write_text('{"github_issue_url": "https://github.com/owaspcornucopia/ThreatSutra/issues/999"}')
     result = exporter.export(REVIEW_RECORD)
@@ -74,3 +74,50 @@ def test_export_rejects_any_decision_other_than_approve(tmp_path):
     for decision in ("reject", "edit", "pending", ""):
         with pytest.raises(ValidationError):
             exporter.export({**REVIEW_RECORD, "decision": decision})
+
+def test_revised_text_produces_different_idempotency_key(tmp_path):
+    exporter = make_exporter(tmp_path)
+    other = {**REVIEW_RECORD, "text": "Revised text"}
+    assert exporter._idempotency_key(REVIEW_RECORD) != exporter._idempotency_key(other)
+
+def test_revised_milestone_produces_different_idempotency_key(tmp_path):
+    exporter = make_exporter(tmp_path)
+    other = {**REVIEW_RECORD, "source_milestone_number": 2}
+    assert exporter._idempotency_key(REVIEW_RECORD) != exporter._idempotency_key(other)
+
+def test_revised_template_version_produces_different_idempotency_key(tmp_path):
+    exporter = make_exporter(tmp_path)
+    other = {**REVIEW_RECORD, "prompt_template_version": "v2"}
+    assert exporter._idempotency_key(REVIEW_RECORD) != exporter._idempotency_key(other)
+
+def test_concurrent_reservation_prevents_duplicate_export(tmp_path):
+    exporter = make_exporter(tmp_path, dry_run=True)
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    marker_path = exporter._marker_path(key)
+    # pre-create pending reservation
+    marker_path.write_text('{"status": "pending"}')
+    result = exporter.export(REVIEW_RECORD)
+    assert result["status"] == "already_exported"
+
+def test_marker_body_contains_idempotency_marker(tmp_path):
+    exporter = make_exporter(tmp_path, dry_run=True)
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    result = exporter.export(REVIEW_RECORD)
+    assert f"<!-- threatsutra-marker:{key} -->" in result["body"]
+
+def test_failed_github_post_cleans_up_reservation(tmp_path, monkeypatch):
+    import requests
+    monkeypatch.setenv("GITHUB_API", "fake-token")
+    exporter = make_exporter(tmp_path, dry_run=False)
+
+    # mock session post to raise error
+    class MockSession:
+        def post(self, *args, **kwargs):
+            raise requests.RequestException("GitHub is down")
+        def mount(self, *args, **kwargs):
+            pass
+    exporter.session = MockSession()
+    with pytest.raises(RuntimeError, match="GitHub is down"):
+        exporter.export(REVIEW_RECORD)
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    assert not exporter._marker_path(key).exists()

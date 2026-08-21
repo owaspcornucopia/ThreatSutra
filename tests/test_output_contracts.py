@@ -1,16 +1,21 @@
 """Tests for output contracts and display safety. """
 import pytest
 from src.validation import (
-    ValidationError,
-    extract_model_json_fields,
-    extract_model_text_field,
-    neutralize_for_display,
-    relevance_color_for_score,
-    validate_evil_user_story,
-    validate_export_artifact,
-    validate_relevance_assessment,
-    validate_verification_test,
-)
+    ValidationError, _validate_text, _validate_total_length, _validate_list,
+    sanitize_text, validate_card, validate_milestone, validate_threats,
+    validate_milestones, validate_cornucopia_response, validate_context_budget,
+    validate_verification_test, extract_model_text_field, relevance_color_for_score,
+    validate_relevance_assessment, validate_github_issue_reference,
+    neutralize_for_display, validate_export_artifact, validate_review_record,
+    extract_model_json_fields, is_valid_threat, is_valid_card, is_valid_milestone,
+    MAX_FIELD_LENGTH, MAX_TOTAL_LENGTH, MAX_LIST_LENGTH, MAX_ISSUE_BODY_LENGTH,
+    validate_evil_user_story, validate_threat_dragon_document,)
+
+VALID_THREAT = {
+    "id": "t1", "type": "cornucopia-companion", "cardNumber": "LLM9",
+    "title": "Title", "description": "Desc", "mitigation": "Mitig",}
+VALID_CARD = {"sectionID": "LLM9", "name": "LLM9", "description": "Card desc."}
+VALID_MILESTONE = {"number": 1, "title": "Phase 1"}
 
 def test_valid_evil_user_story_passes():
     text = "As an attacker, I want to inject instructions, so that I exfiltrate data."
@@ -86,3 +91,196 @@ def test_validate_export_artifact_accepts_complete_artifact():
         "source_threat_id": "t1", "source_card_id": "c1", "source_milestone_number": 1,
     }
     assert validate_export_artifact(artifact) == artifact
+
+def test_validate_text_none_required():
+    with pytest.raises(ValidationError):
+        _validate_text(None, "field", "test source", required=True)
+
+def test_validate_text_not_string():
+    with pytest.raises(ValidationError):
+        _validate_text(123, "field", "test source")
+
+def test_validate_text_empty_required():
+    with pytest.raises(ValidationError):
+        _validate_text("  ", "field", "test source", required=True)
+
+def test_validate_text_control_chars():
+    with pytest.raises(ValidationError):
+        _validate_text("\x01", "field", "test source")
+
+def test_validate_text_over_max_length():
+    with pytest.raises(ValidationError):
+        _validate_text("a" * (MAX_FIELD_LENGTH + 1), "field", "test source")
+
+def test_validate_total_length_exceeded():
+    with pytest.raises(ValidationError):
+        _validate_total_length(MAX_TOTAL_LENGTH + 1, "test source")
+
+def test_validate_list_not_a_list():
+    with pytest.raises(ValidationError):
+        _validate_list("not a list", "field")
+
+def test_validate_list_over_max():
+    with pytest.raises(ValidationError):
+        _validate_list([1] * (MAX_LIST_LENGTH + 1), "field")
+
+def test_sanitize_text_non_string():
+    assert sanitize_text(123) == ""
+
+def test_validate_card_links_not_list():
+    bad_card = VALID_CARD.copy()
+    bad_card["links"] = "not a list"
+    with pytest.raises(ValidationError):
+        validate_card(bad_card)
+
+def test_validate_milestone_non_int_number():
+    bad_milestone = VALID_MILESTONE.copy()
+    bad_milestone["number"] = "1"
+    with pytest.raises(ValidationError):
+        validate_milestone(bad_milestone)
+
+def test_validate_threats_list():
+    assert validate_threats([VALID_THREAT]) == [VALID_THREAT]
+
+def test_validate_threats_bad_entry():
+    with pytest.raises(ValidationError):
+        validate_threats([VALID_THREAT, "not a threat"])
+
+def test_validate_milestones_bad_entry():
+    with pytest.raises(ValidationError):
+        validate_milestones([VALID_MILESTONE, "not a milestone"])
+
+def test_validate_cornucopia_response_bad_card():
+    response = {"cards": [{"invalid": "card"}]}
+    with pytest.raises(ValidationError):
+        validate_cornucopia_response(response)
+
+def test_validate_context_budget_over_limit():
+    with pytest.raises(ValidationError):
+        validate_context_budget("a" * (MAX_TOTAL_LENGTH + 1))
+
+def test_verify_test_multiline_rejected():
+    with pytest.raises(ValidationError):
+        validate_verification_test("Given a\nWhen b\nThen c")
+
+def test_extract_model_text_field_strips_json_fence():
+    raw = '```json\n{"evil_user_story": "As a bot, I want to X, so that Y."}\n```'
+    assert extract_model_text_field(raw, "evil_user_story") == "As a bot, I want to X, so that Y."
+
+def test_relevance_color_out_of_range():
+    with pytest.raises(ValidationError):
+        relevance_color_for_score(0)
+    with pytest.raises(ValidationError):
+        relevance_color_for_score(11)
+
+def test_validate_relevance_assessment_non_int_score():
+    with pytest.raises(ValidationError):
+        validate_relevance_assessment({"score": "8", "explanation": "x"})
+
+def test_validate_relevance_assessment_bool_score():
+    with pytest.raises(ValidationError):
+        validate_relevance_assessment({"score": True, "explanation": "x"})
+
+def test_validate_github_issue_ref_missing_field():
+    with pytest.raises(ValidationError):
+        validate_github_issue_reference({"title": "x"})
+
+def test_validate_github_issue_ref_body_too_long():
+    with pytest.raises(ValidationError):
+        validate_github_issue_reference({"number": 1, "title": "t", "body": "a" * (MAX_ISSUE_BODY_LENGTH + 1), "url": "u"})
+
+def test_neutralize_for_display_none():
+    assert neutralize_for_display(None) == ""
+
+def test_validate_export_artifact_bad_type():
+    with pytest.raises(ValidationError):
+        validate_export_artifact({"artifact_type": "unknown", "text": "a", "source_threat_id": "b", "source_card_id": "c", "source_milestone_number": 1})
+
+def test_validate_review_record_bad_artifact_type():
+    with pytest.raises(ValidationError):
+        validate_review_record({"artifact_type": "unknown", "verdict": "accept"})
+
+def test_extract_json_fields_fence_stripped():
+    raw = '```json\n{"score": 8, "explanation": "x"}\n```'
+    payload = extract_model_json_fields(raw, ("score", "explanation"))
+    assert payload["score"] == 8
+
+def test_extract_json_fields_invalid_json():
+    with pytest.raises(ValidationError):
+        extract_model_json_fields("not json", ("score", "explanation"))
+
+def test_is_valid_threat_true():
+    assert is_valid_threat(VALID_THREAT)
+
+def test_is_valid_threat_false():
+    assert not is_valid_threat({"id": "t1"})
+
+def test_is_valid_card_true():
+    assert is_valid_card(VALID_CARD)
+
+def test_is_valid_card_false():
+    assert not is_valid_card({"name": "only name"})
+
+def test_is_valid_milestone_true():
+    assert is_valid_milestone(VALID_MILESTONE)
+
+def test_is_valid_milestone_false():
+    assert not is_valid_milestone({"number": "1"})
+
+def test_validate_text_none_optional():
+    """Line 52: _validate_text with None and required=False returns 0."""
+    result = _validate_text(None, "optional_field", "test", required=False)
+    assert result == 0
+
+def test_validate_threat_dragon_document_bad_threat():
+    """Lines 184-185: A bad threat inside a valid document structure raises."""
+    doc = {
+        "summary": {"title": "Test", "description": "Desc"},
+        "detail": {
+            "diagrams": [{
+                "cells": [{
+                    "data": {
+                        "threats": [{"id": "t1"}]  
+                    }
+                }]
+            }]
+        }
+    }
+    with pytest.raises(ValidationError, match="Threat Dragon threat at diagram"):
+        validate_threat_dragon_document(doc)
+
+def test_validate_cornucopia_response_with_invalid_card():
+    """Lines 207-208: A bad card inside a valid response envelope raises."""
+    payload = {
+        "meta": {"edition": "webapp", "component": "cards", "language": "en", "version": "1.0"},
+        "standards": [{"sectionID": "LLM9"}]  
+    }
+    with pytest.raises(ValidationError, match="Cornucopia card at position"):
+        validate_cornucopia_response(payload)
+
+def test_validate_context_budget_exceeds_token_limit():
+    """Line 237: context with huge text exceeds MAX_CONTEXT_TOKENS."""
+    # MAX_CONTEXT_TOKENS=3000, CHARS_PER_TOKEN_ESTIMATE=3, so 9001+ chars exceeds
+    huge_fields = {"field1": "a" * 5000, "field2": "b" * 5000}
+    with pytest.raises(ValidationError, match="token limit"):
+        validate_context_budget(huge_fields)
+
+def test_validate_relevance_explanation_too_long():
+    """Line 302: explanation exceeds MAX_FIELD_LENGTH."""
+    payload = {"score": 5, "explanation": "x" * (MAX_FIELD_LENGTH + 1)}
+    with pytest.raises(ValidationError):
+        validate_relevance_assessment(payload)
+
+def test_validate_review_record_invalid_artifact_type():
+    """Line 355: review record with valid decision but bad artifact_type."""
+    record = {
+        "decision": "approve",
+        "artifact_type": "unknown_type",
+        "text": "Some text",
+        "source_threat_id": "t1",
+        "source_card_id": "LLM9",
+        "source_milestone_number": 1,
+        "timestamp": "2026-08-18T00:00:00+00:00",
+    }
+    with pytest.raises(ValidationError, match="artifact_type must be"):
+        validate_review_record(record)

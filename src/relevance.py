@@ -3,7 +3,6 @@ Handles relevance scoring and reviewer visibility. Each threat is scored (1–10
 based on threat data and related GitHub issues. The score is shown to the reviewer (green/yellow/red) as guidance only — not a blocking check.
 Used by the review stage to support human decision-making.
 """
-import json
 from dataclasses import dataclass
 from typing import Tuple
 from src.adapters.GitHubIssueClient import GitHubIssueClient

@@ -16,6 +16,7 @@ RETRY_TOTAL = 3
 RETRY_BACKOFF_FACTOR = 0.5
 RETRY_STATUS_CODES = (429, 500, 502, 503, 504)
 EXPORT_MARKERS_DIRNAME = "export_markers"
+MARKER_SCHEMA_VERSION = "2"
 
 ARTIFACT_TITLES = {
     "evil_user_story": "Evil user story",
@@ -52,14 +53,19 @@ class GitHubIssueExporter:
         )
         self.session.mount("https://", HTTPAdapter(max_retries=retry))
 
-    def _idempotency_key(self, artifact: dict) -> str:
-        basis = f"{artifact['artifact_type']}:{artifact['source_threat_id']}:{artifact['source_card_id']}"
+    def _idempotency_key(self, review_record: dict) -> str:
+        basis = (
+            f"{review_record['artifact_type']}:{review_record['source_threat_id']}:"
+            f"{review_record['source_card_id']}:{review_record['text']}:"
+            f"{review_record['source_milestone_number']}:{review_record.get('model')}:"
+            f"{review_record.get('prompt_template_version')}:{MARKER_SCHEMA_VERSION}"
+        )
         return hashlib.sha256(basis.encode("utf-8")).hexdigest()
 
     def _marker_path(self, key: str) -> Path:
         return self.markers_dir / f"{key}.json"
 
-    def _build_title_and_body(self, artifact: dict) -> tuple:
+    def _build_title_and_body(self, artifact: dict, key: str) -> tuple:
         label = ARTIFACT_TITLES[artifact["artifact_type"]]
         title = sanitize_text(f"[ThreatSutra] {label}: {artifact['text']}"[:250])
         body = sanitize_text(
@@ -70,6 +76,7 @@ class GitHubIssueExporter:
             f"- Source threat: `{artifact['source_threat_id']}`\n"
             f"- Source card: `{artifact['source_card_id']}`\n"
             f"- Milestone: #{artifact['source_milestone_number']}\n"
+            f"<!-- threatsutra-marker:{key} -->\n"
         )
         return title, body
 
@@ -88,14 +95,22 @@ class GitHubIssueExporter:
             "source_milestone_number": review_record["source_milestone_number"],
         }
         validate_export_artifact(artifact)
-        key = self._idempotency_key(artifact)
+        key = self._idempotency_key(review_record)
         marker_path = self._marker_path(key)
-        if marker_path.exists():
+        
+        try:
+            fd = os.open(marker_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w") as f:
+                f.write('{"status": "pending"}')
+        except FileExistsError:
             return {"status": "already_exported", "marker": json.loads(marker_path.read_text())}
-        title, body = self._build_title_and_body(artifact)
+            
+        title, body = self._build_title_and_body(artifact, key)
         if self.dry_run:
+            marker_path.unlink()
             return {"status": "dry_run", "title": title, "body": body}
         if not self.token:
+            marker_path.unlink()
             raise RuntimeError(
                 "GITHUB_API token is required for live export (see .env.example)."
             )
@@ -106,6 +121,7 @@ class GitHubIssueExporter:
             response.raise_for_status()
             created = response.json()
         except requests.RequestException as exc:
+            marker_path.unlink()
             raise RuntimeError(f"Could not create GitHub issue for export: {exc}") from exc
         marker = {
             "idempotency_key": key,

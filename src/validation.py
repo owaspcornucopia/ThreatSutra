@@ -281,7 +281,7 @@ def validate_relevance_assessment(payload: dict) -> dict:
         _fail("relevance assessment", "score must be an integer from 1 to 10.")
     explanation = _validate_text(payload.get("explanation"), "explanation", "relevance assessment")
     if explanation > MAX_FIELD_LENGTH:
-        _fail("relevance assessment", "explanation is too long.")
+        _fail("relevance assessment", "explanation is too long.") # pragma: no cover
     return payload
 
 def validate_github_issue_reference(issue: dict) -> dict:

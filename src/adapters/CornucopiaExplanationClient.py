@@ -1,9 +1,13 @@
 """
 Fetches and extracts detailed Cornucopia card content.
 The Cornucopia API only gives basic info like ID and description.
-But generation also needs: Scenario / What can go wrong / Mitigation / requirement. 
-This data exists only in each card's explanation.md in the Cornucopia repo.
-So this adapter fetches that file, extracts only the needed sections, and returns clean structured data (not raw Markdown).
+But for generation (issues #5, #6, #11), we also need:
+- Scenario
+- What can go wrong
+- Mitigation / requirement
+This data exists only in each card’s explanation.md in the Cornucopia repo.
+So this adapter fetches that file, extracts only the needed sections,
+and returns clean structured data (not raw Markdown).
 """
 import hashlib
 import re
@@ -27,10 +31,6 @@ RETRY_STATUS_CODES = (429, 500, 502, 503, 504)
 MAX_REPOSITORY_TREE_ENTRIES = 100000
 API_BASE_URL = f"https://api.github.com/repos/{REPOSITORY}"
 RAW_BASE_URL = f"https://raw.githubusercontent.com/{REPOSITORY}/{PINNED_COMMIT_SHA}"
-
-# Confirmed edition -> repository directory mapping (webapp confirmed via
-# public source; companion confirmed via mentor-provided screenshot in the
-# Codex conversation). Add new editions here if the DFD ever uses them.
 EDITION_DIRECTORY_BY_EDITION = {
     "webapp": "webapp-cards-3.0-en",
     "companion": "companion-cards-1.0-en",
