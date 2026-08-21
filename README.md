@@ -164,14 +164,20 @@ Review records are written to `outputs/` as timestamped JSON files. Export marke
 
 ---
 
-## Testing & Quality
+## Testing & Quality Evidence
 
-- **62/62 tests passing** across context construction, validation, prompt building, export logic, and error handling
-- **GitHub Actions CI** runs the full test suite on Python 3.10, 3.11, and 3.12 for every push and pull request to `main`
-- Validation and structured output parsing logic are covered by dedicated test modules
+| Metric | Value |
+|--------|-------|
+| **Total tests** | **190 / 190 passing** |
+| **Coverage** | **100 %** (881 statements, 0 missed) |
+| **CI** | ![CI: passing](https://github.com/owaspcornucopia/ThreatSutra/actions/workflows/tests.yml/badge.svg) (Python 3.10, 3.11, 3.12) |
+| **Coverage gate** | `--cov-fail-under=95` enforced in CI |
+| **Lint / Types** | `ruff` and `mypy` clean |
+
+Run the suite locally:
 
 ```bash
-python -m pytest -q
+python -m pytest -q --cov=src --cov-report=term-missing
 ```
 
 ---
@@ -189,4 +195,10 @@ Contributions are welcome. When contributing:
 
 ## License
 
-This project is licensed under the terms described in [LICENSE.md](LICENSE.md).
+This project is licensed under the terms described in [`LICENSE.md`](LICENSE.md).
+
+---
+
+*Repository URL*: https://github.com/owaspcornucopia/ThreatSutra
+*Mentor*: Johan Sydseter[OWASP Cornucopia co-project leader]
+*Mentee*: Mahaboobunnisa Md[Contributor]
