@@ -1,5 +1,5 @@
 google-genai
 python-dotenv>=1.2.3
-requests>=2.31.0
+requests>=2.34.2
 pytest>=8.0.0
 pytest-cov>=7.1.0
