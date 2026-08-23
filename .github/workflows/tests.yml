@@ -26,7 +26,7 @@ jobs:
           --cov-fail-under=95
       - name: Upload coverage to Qlty
         if: matrix.python-version == '3.12'
-        uses: qltysh/qlty-action/coverage@v2
+        uses: qltysh/qlty-action/coverage@08a0a862c159eae9b9003081da6663d96efef637
         with:
           oidc: true
           token: ${{ secrets.QLTY_COVERAGE_TOKEN }}
