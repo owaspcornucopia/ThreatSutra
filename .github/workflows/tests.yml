@@ -18,8 +18,17 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -r requirements.txt
-      - run: python -m pytest -q --cov=src --cov-report=term-missing --cov-fail-under=95
-      - uses: qltysh/qlty-action/coverage@v2
+      - run: >
+          python -m pytest -q
+          --cov=src
+          --cov-report=term-missing
+          --cov-report=xml:coverage.xml
+          --cov-fail-under=95
+      - name: Upload coverage to Qlty
+        if: matrix.python-version == '3.12'
+        uses: qltysh/qlty-action/coverage@v2
         with:
+          oidc: true
           token: ${{ secrets.QLTY_COVERAGE_TOKEN }}
-          files: reports/lcov.info
+          files: coverage.xml
+          format: cobertura
