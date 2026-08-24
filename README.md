@@ -1,6 +1,8 @@
-# ThreatSutra
+<img src="./resources/logo/threatsutra.svg?raw=true" width="150">
 
 [![Maintainability](https://qlty.sh/gh/owaspcornucopia/projects/ThreatSutra/maintainability.svg)](https://qlty.sh/gh/owaspcornucopia/projects/ThreatSutra)
+
+# OWASP Cornucopia - ThreatSutra
 
 AI-assisted security requirement generation from OWASP Threat Dragon models and Cornucopia cards.
 
