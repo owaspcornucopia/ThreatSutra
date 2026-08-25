@@ -1,7 +1,6 @@
 """
 Fetches GitHub issues linked to a threat.For relevance scoring, the system must analyze the actual
-linked GitHub issues, not just the threat and card data.
-This client fetches only the required data (title and body) from each issue
+linked GitHub issues, not just the threat and card data. This client fetches only the required data (title and body) from each issue
 to support that analysis. It does not fetch comments or extra metadata.
 """
 import hashlib
@@ -23,7 +22,8 @@ RETRY_STATUS_CODES = (429, 500, 502, 503, 504)
 class GitHubIssueClient:
     """Fetches and validates referenced GitHub issues, by URL, with per-instance caching."""
     def __init__(self, token: str = None, timeout: int = DEFAULT_TIMEOUT_SECONDS,
-                 session: requests.Session = None):
+                 session: requests.Session = None, allowed_repos=None):
+        self.allowed_repos = frozenset(allowed_repos) if allowed_repos else frozenset()
         self.token = token or os.environ.get("GITHUB_API")
         self.timeout = timeout
         self._cache = {}
@@ -38,13 +38,18 @@ class GitHubIssueClient:
         self.session.mount("https://", HTTPAdapter(max_retries=retry))
 
     def get_issue(self, issue_url: str) -> dict:
-        """Fetches one issue's title and body by its GitHub URL. Read-only - never comments."""
+        """Fetches one issue's title and body by its GitHub URL. Read-only - never comments.Includes an allowlist check for the repository."""
         if issue_url in self._cache:
             return dict(self._cache[issue_url])
         match = ISSUE_URL_PATTERN.match(issue_url)
         if not match:
             raise ValueError(f"'{issue_url}' is not a recognized GitHub issue URL.")
         repo, number = match.group(1), match.group(2)
+        if self.allowed_repos and repo not in self.allowed_repos:
+            raise ValueError(
+                f"Repository '{repo}' is not in the configured allow-list "
+                f"({sorted(self.allowed_repos)}). To read issues from additional "
+                f"repositories, add them to allowed_repos.")
         url = f"https://api.github.com/repos/{repo}/issues/{number}"
         headers = {"Accept": "application/vnd.github+json"}
         if self.token:

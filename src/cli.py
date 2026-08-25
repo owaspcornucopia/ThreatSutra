@@ -9,7 +9,6 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
 from src.adapters.GitHubIssueClient import GitHubIssueClient
 from src.adapters.GitHubIssueExporter import GitHubIssueExporter
 from src.orchestrator import (
