@@ -5,13 +5,21 @@ Without a write token, it automatically behaves as dry-run.
 import hashlib
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from src.validation import sanitize_text, validate_export_artifact, validate_review_record 
+
+from src.validation import (
+    sanitize_text,
+    validate_export_artifact,
+    validate_review_record,
+)
 
 DEFAULT_TIMEOUT_SECONDS = 10
+PENDING_TIMEOUT_SECONDS = 300
 RETRY_TOTAL = 3
 RETRY_BACKOFF_FACTOR = 0.5
 RETRY_STATUS_CODES = (429, 500, 502, 503, 504)
@@ -80,6 +88,76 @@ class GitHubIssueExporter:
         )
         return title, body
 
+    def _search_github_for_marker(self, key: str) -> dict | None:
+        """
+        Searches GitHub for an issue with the given marker to recover from interrupted exports.
+        Security rationale: Prevents duplicate issues and handles state mismatch safely without manual intervention.
+        """
+        if self.dry_run or not self.token:
+            return None
+            
+        url = "https://api.github.com/search/issues"
+        params = {"q": f"repo:{self.repo} in:body threatsutra-marker:{key}"}
+        headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {self.token}"}
+        
+        try:
+            response = self.session.get(url, headers=headers, params=params, timeout=self.timeout)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("total_count", 0) > 0:
+                issue = data["items"][0]
+                return {
+                    "github_issue_number": issue.get("number"),
+                    "github_issue_url": issue.get("html_url")
+                }
+        except requests.RequestException:
+            pass
+        return None
+
+    def _recover_pending_marker(self, marker_path: Path, key: str, review_record: dict) -> dict | None:
+        """
+        Attempts to recover a pending marker that might be stuck due to an interrupted export.
+        Security rationale: Ensures that if an issue was successfully created but the marker wasn't fully written, we don't lose the reference to the issue.
+        """
+        try:
+            existing_marker = json.loads(marker_path.read_text())
+        except json.JSONDecodeError:
+            marker_path.unlink(missing_ok=True)
+            return None
+            
+        created_at_str = existing_marker.get("created_at")
+        if not created_at_str:
+            timed_out = True
+        else:
+            try:
+                created_at = datetime.fromisoformat(created_at_str)
+                timed_out = (datetime.now(timezone.utc) - created_at).total_seconds() > PENDING_TIMEOUT_SECONDS
+            except ValueError:
+                timed_out = True
+
+        if timed_out:
+            github_data = self._search_github_for_marker(key)
+            if github_data:
+                marker = {
+                    "idempotency_key": key,
+                    "artifact_type": review_record["artifact_type"],
+                    "source_threat_id": review_record["source_threat_id"],
+                    "source_card_id": review_record["source_card_id"],
+                    "github_issue_number": github_data["github_issue_number"],
+                    "github_issue_url": github_data["github_issue_url"],
+                    "model": review_record.get("model"),
+                    "prompt_template_version": review_record.get("prompt_template_version"),
+                    "relevance": review_record.get("relevance"),
+                    "provenance": review_record.get("provenance"),
+                }
+                marker_path.write_text(json.dumps(marker, indent=2))
+                return {"status": "already_exported", "marker": marker}
+            else:
+                marker_path.unlink(missing_ok=True)
+                return None
+        
+        return {"status": "already_exported", "marker": existing_marker}
+
     def export(self, review_record: dict) -> dict:
         """
         Exports one artifact from its persisted review record. Note that:the exporter validates the record and independently checks
@@ -101,9 +179,17 @@ class GitHubIssueExporter:
         try:
             fd = os.open(marker_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             with os.fdopen(fd, "w") as f:
-                f.write('{"status": "pending"}')
+                f.write(json.dumps({"status": "pending", "created_at": datetime.now(timezone.utc).isoformat()}))
         except FileExistsError:
-            return {"status": "already_exported", "marker": json.loads(marker_path.read_text())}
+            marker_data = json.loads(marker_path.read_text())
+            if marker_data.get("status") == "pending":
+                recovered = self._recover_pending_marker(marker_path, key, review_record)
+                if recovered is not None:
+                    return recovered
+                with open(marker_path, "w") as f:
+                    f.write(json.dumps({"status": "pending", "created_at": datetime.now(timezone.utc).isoformat()}))
+            else:
+                return {"status": "already_exported", "marker": marker_data}
             
         title, body = self._build_title_and_body(artifact, key)
         if self.dry_run:
@@ -137,3 +223,4 @@ class GitHubIssueExporter:
         }
         marker_path.write_text(json.dumps(marker, indent=2))
         return {"status": "created", "marker": marker}
+    
