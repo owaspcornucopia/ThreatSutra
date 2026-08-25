@@ -1,12 +1,14 @@
+from unittest.mock import MagicMock
+
 import pytest
 import requests
-from unittest.mock import MagicMock
 
 from src.adapters.CornucopiaClient import CornucopiaClient
 from src.adapters.CornucopiaExplanationClient import CornucopiaExplanationClient
-from src.adapters.GitHubMilestoneClient import GitHubMilestoneClient
 from src.adapters.GitHubIssueClient import GitHubIssueClient
 from src.adapters.GitHubIssueExporter import GitHubIssueExporter
+from src.adapters.GitHubMilestoneClient import GitHubMilestoneClient
+
 
 def make_mock_response(status_code=200, json_data=None, text="", links=None):
     resp = MagicMock(spec=requests.Response)
@@ -222,6 +224,28 @@ def test_issue_timeout():
     with pytest.raises(RuntimeError):
         client.get_issue("https://github.com/repo/name/issues/5")
 
+def test_issue_client_allows_all_when_no_allowlist():
+    session = MagicMock(spec=requests.Session)
+    json_data = {"number": 5, "title": "Issue title", "body": "Issue body", "html_url": "http://issue/5"}
+    session.get.return_value = make_mock_response(json_data=json_data)
+    client = GitHubIssueClient(session=session)  # no allowed_repos
+    issue = client.get_issue("https://github.com/evil-org/evil-repo/issues/5")
+    assert issue["number"] == 5
+
+def test_issue_client_rejects_disallowed_repo():
+    session = MagicMock(spec=requests.Session)
+    client = GitHubIssueClient(session=session, allowed_repos=["owaspcornucopia/ThreatSutra"])
+    with pytest.raises(ValueError, match="is not in the configured allow-list"):
+        client.get_issue("https://github.com/evil-org/evil-repo/issues/5")
+
+def test_issue_client_allows_configured_repo():
+    session = MagicMock(spec=requests.Session)
+    json_data = {"number": 5, "title": "Issue title", "body": "Issue body", "html_url": "http://issue/5"}
+    session.get.return_value = make_mock_response(json_data=json_data)
+    client = GitHubIssueClient(session=session, allowed_repos=["owaspcornucopia/ThreatSutra"])
+    issue = client.get_issue("https://github.com/owaspcornucopia/ThreatSutra/issues/5")
+    assert issue["number"] == 5
+
 EXPORTER_REVIEW_RECORD = {
     "artifact_type": "evil_user_story",
     "text": "As an attacker, I want to inject instructions, so that I exfiltrate data.",
@@ -401,4 +425,3 @@ def test_explanation_fetch_error():
     session.get.side_effect = requests.RequestException("download failed")
     with pytest.raises(RuntimeError, match="Could not retrieve Cornucopia explanation"):
         client.get_explanation("companion", "LLM9")
-        

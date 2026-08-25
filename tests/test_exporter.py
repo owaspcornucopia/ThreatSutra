@@ -91,13 +91,123 @@ def test_revised_template_version_produces_different_idempotency_key(tmp_path):
     assert exporter._idempotency_key(REVIEW_RECORD) != exporter._idempotency_key(other)
 
 def test_concurrent_reservation_prevents_duplicate_export(tmp_path):
+    from datetime import datetime, timezone
     exporter = make_exporter(tmp_path, dry_run=True)
     key = exporter._idempotency_key(REVIEW_RECORD)
     marker_path = exporter._marker_path(key)
-    # pre-create pending reservation
-    marker_path.write_text('{"status": "pending"}')
+    # pre-create fresh pending reservation
+    marker_path.write_text(f'{{"status": "pending", "created_at": "{datetime.now(timezone.utc).isoformat()}"}}')
     result = exporter.export(REVIEW_RECORD)
     assert result["status"] == "already_exported"
+
+def test_stale_pending_marker_is_recovered(tmp_path, monkeypatch):
+    from datetime import datetime, timezone, timedelta
+    monkeypatch.setenv("GITHUB_API", "fake-token")
+    exporter = make_exporter(tmp_path, dry_run=False)
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    marker_path = exporter._marker_path(key)
+    stale_time = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+    marker_path.write_text(f'{{"status": "pending", "created_at": "{stale_time}"}}')
+    
+    # Mock search to return an existing issue
+    class MockSession:
+        def get(self, *args, **kwargs):
+            class MockResponse:
+                def raise_for_status(self): pass
+                def json(self):
+                    return {"total_count": 1, "items": [{"number": 99, "html_url": "http://gh/99"}]}
+            return MockResponse()
+        def mount(self, *args, **kwargs): pass
+    exporter.session = MockSession()
+    
+    result = exporter.export(REVIEW_RECORD)
+    assert result["status"] == "already_exported"
+    assert result["marker"]["github_issue_number"] == 99
+
+def test_github_search_for_existing_issue(tmp_path):
+    exporter = make_exporter(tmp_path, dry_run=False)
+    exporter.token = "fake"
+    class MockSession:
+        def get(self, *args, **kwargs):
+            class MockResponse:
+                def raise_for_status(self): pass
+                def json(self): return {"total_count": 0}
+            return MockResponse()
+        def mount(self, *args, **kwargs): pass
+    exporter.session = MockSession()
+    assert exporter._search_github_for_marker("key123") is None
+
+def test_export_with_stale_marker_not_on_github(tmp_path, monkeypatch):
+    from datetime import datetime, timezone, timedelta
+    monkeypatch.setenv("GITHUB_API", "fake-token")
+    exporter = make_exporter(tmp_path, dry_run=True)
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    marker_path = exporter._marker_path(key)
+    stale_time = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+    marker_path.write_text(f'{{"status": "pending", "created_at": "{stale_time}"}}')
+    
+    # Mock search to return NO existing issue
+    class MockSession:
+        def get(self, *args, **kwargs):
+            class MockResponse:
+                def raise_for_status(self): pass
+                def json(self): return {"total_count": 0}
+            return MockResponse()
+        def mount(self, *args, **kwargs): pass
+    exporter.session = MockSession()
+    
+    result = exporter.export(REVIEW_RECORD)
+    # Because dry_run=True, after overwriting the stale marker with a new pending one, it returns dry_run
+    assert result["status"] == "dry_run"
+
+def test_recover_pending_marker_missing_date(tmp_path):
+    exporter = make_exporter(tmp_path, dry_run=True)
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    marker_path = exporter._marker_path(key)
+    marker_path.write_text('{"status": "pending"}')
+    # Missing date triggers timed_out=True. Since dry_run=True, search returns None, marker unlinks, returns None.
+    assert exporter._recover_pending_marker(marker_path, key, REVIEW_RECORD) is None
+    assert not marker_path.exists()
+
+def test_recover_pending_marker_corrupted_json(tmp_path):
+    exporter = make_exporter(tmp_path, dry_run=True)
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    marker_path = exporter._marker_path(key)
+    marker_path.write_text("{not valid json")
+    # A corrupted marker should be unlinked and treated as if it didn't exist (returns None)
+    assert exporter._recover_pending_marker(marker_path, key, REVIEW_RECORD) is None
+    assert not marker_path.exists()
+
+def test_recover_pending_marker_invalid_date(tmp_path):
+    exporter = make_exporter(tmp_path, dry_run=True)
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    marker_path = exporter._marker_path(key)
+    marker_path.write_text('{"status": "pending", "created_at": "bad-date-string"}')
+    # Bad date triggers timed_out=True. Since dry_run=True, search returns None, marker unlinks, returns None.
+    assert exporter._recover_pending_marker(marker_path, key, REVIEW_RECORD) is None
+    assert not marker_path.exists()
+
+def test_search_github_for_marker_request_exception(tmp_path):
+    exporter = make_exporter(tmp_path, dry_run=False)
+    exporter.token = "fake"
+    import requests
+    class MockSession:
+        def get(self, *args, **kwargs):
+            raise requests.RequestException("Network error")
+        def mount(self, *args, **kwargs): pass
+    exporter.session = MockSession()
+    # Should catch exception and gracefully return None
+    assert exporter._search_github_for_marker("key123") is None
+
+def test_export_no_token_cleans_up_marker(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_API", raising=False)
+    exporter = make_exporter(tmp_path, dry_run=False)
+    with pytest.raises(RuntimeError, match="token is required"):
+        exporter.export(REVIEW_RECORD)
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    marker_path = exporter._marker_path(key)
+    # The pending marker should be cleaned up before raising
+    assert not marker_path.exists()
 
 def test_marker_body_contains_idempotency_marker(tmp_path):
     exporter = make_exporter(tmp_path, dry_run=True)
@@ -109,15 +219,18 @@ def test_failed_github_post_cleans_up_reservation(tmp_path, monkeypatch):
     import requests
     monkeypatch.setenv("GITHUB_API", "fake-token")
     exporter = make_exporter(tmp_path, dry_run=False)
-
+    
     # mock session post to raise error
     class MockSession:
         def post(self, *args, **kwargs):
             raise requests.RequestException("GitHub is down")
         def mount(self, *args, **kwargs):
             pass
+            
     exporter.session = MockSession()
+    
     with pytest.raises(RuntimeError, match="GitHub is down"):
         exporter.export(REVIEW_RECORD)
+        
     key = exporter._idempotency_key(REVIEW_RECORD)
     assert not exporter._marker_path(key).exists()
