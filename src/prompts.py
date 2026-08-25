@@ -3,8 +3,10 @@
    we can tweak wording without touching the logic that calls the AI.
 """
 import json
+
 from src.context import AnalysisContext
-from src.validation import ValidationError, CHARS_PER_TOKEN_ESTIMATE
+from src.validation import CHARS_PER_TOKEN_ESTIMATE, ValidationError
+
 MAX_RELEVANCE_PROMPT_TOKENS = 3_000
 MAX_LINKED_ISSUES = 10
 MAX_ISSUE_BODY_CHARS_FOR_PROMPT = 1_000

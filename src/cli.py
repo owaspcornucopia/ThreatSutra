@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
+
 from src.adapters.GitHubIssueClient import GitHubIssueClient
 from src.adapters.GitHubIssueExporter import GitHubIssueExporter
 from src.orchestrator import (
@@ -17,9 +18,11 @@ from src.orchestrator import (
     call_ai_model,
     generate_evil_user_story,
     generate_verification_test,
-    run_pipeline,)
+    run_pipeline,
+)
 from src.relevance import assess_relevance
 from src.validation import ValidationError, neutralize_for_display, validate_evil_user_story, validate_verification_test
+
 
 def print_header(text: str) -> None:
     print("\n" + "=" * 60)

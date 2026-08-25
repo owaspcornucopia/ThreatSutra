@@ -4,7 +4,7 @@ and milestone info into a single validated structure used for generation and rev
 """
 import re
 from dataclasses import dataclass
-from typing import Optional, Tuple
+
 from src.validation import (
     ValidationError,
     sanitize_text,
@@ -14,6 +14,7 @@ from src.validation import (
     validate_milestone,
     validate_threat,
 )
+
 MILESTONE_URL_PATTERN = re.compile(r"https://github\.com/owaspcornucopia/ThreatSutra/milestone/(\d+)")
 ISSUE_URL_PATTERN = re.compile(r"https://github\.com/owaspcornucopia/ThreatSutra/issues/\d+")
 
@@ -28,7 +29,7 @@ class SourceProvenance:
 @dataclass(frozen=True)
 class AnalysisContext:
     threat_id: str
-    threat_number: Optional[int]
+    threat_number: int | None
     threat_title: str
     threat_description: str
     threat_mitigation: str
@@ -42,8 +43,8 @@ class AnalysisContext:
     milestone_number: int
     milestone_title: str
     milestone_description: str
-    linked_issue_urls: Tuple[str, ...]
-    provenance: Tuple[SourceProvenance, ...]
+    linked_issue_urls: tuple[str, ...]
+    provenance: tuple[SourceProvenance, ...]
     estimated_tokens: int
 
 def extract_milestone_number(summary_description: str) -> int:
@@ -65,7 +66,7 @@ def select_milestone(milestones: list, milestone_number: int) -> dict:
         "but was not returned by the GitHub API."
     )
 
-def _linked_issue_urls(description: str) -> Tuple[str, ...]:
+def _linked_issue_urls(description: str) -> tuple[str, ...]:
     """Keeps linked GitHub Issue URLs as traceability/provenance only - their bodies are
     not fetched. Full issue-content retrieval and relevance screening happen separately, in the 
     relevance-scoring stage (src/relevance.py)."""

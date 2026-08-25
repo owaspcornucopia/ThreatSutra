@@ -1,7 +1,10 @@
-import pytest
 from unittest.mock import MagicMock
-from src.orchestrator import run_pipeline
+
+import pytest
+
 from src.context import AnalysisContext
+from src.orchestrator import run_pipeline
+
 
 class FakeThreatDragonReader:
     def read_threat_source(self):

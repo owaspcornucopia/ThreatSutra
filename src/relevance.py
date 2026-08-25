@@ -4,7 +4,7 @@ based on threat data and related GitHub issues. The score is shown to the review
 Used by the review stage to support human decision-making.
 """
 from dataclasses import dataclass
-from typing import Tuple
+
 from src.adapters.GitHubIssueClient import GitHubIssueClient
 from src.context import AnalysisContext
 from src.prompts import build_relevance_prompt
@@ -14,12 +14,13 @@ from src.validation import (
     validate_relevance_assessment,
 )
 
+
 @dataclass(frozen=True)
 class RelevanceAssessment:
     score: int
     color: str
     explanation: str
-    assessed_issue_urls: Tuple[str, ...]
+    assessed_issue_urls: tuple[str, ...]
 
 def assess_relevance(context: AnalysisContext, call_ai_model, issue_client: GitHubIssueClient = None) -> RelevanceAssessment:
     """

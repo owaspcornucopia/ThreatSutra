@@ -8,9 +8,11 @@ import hashlib
 import json
 import os
 from datetime import datetime, timezone
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
 from src.validation import validate_milestones
 
 DEFAULT_TIMEOUT_SECONDS = 10

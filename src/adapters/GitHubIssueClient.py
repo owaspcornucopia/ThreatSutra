@@ -8,9 +8,11 @@ import json
 import os
 import re
 from datetime import datetime, timezone
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
 from src.validation import validate_github_issue_reference
 
 ISSUE_URL_PATTERN = re.compile(r"https://github\.com/([^/]+/[^/]+)/issues/(\d+)")

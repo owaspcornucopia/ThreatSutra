@@ -1,13 +1,22 @@
-import os
 import json
 from pathlib import Path
 from unittest.mock import MagicMock
+
 import pytest
 import requests
 
-from src.context import build_analysis_context
 from src.adapters.GitHubIssueExporter import GitHubIssueExporter
-from tests.test_context import THREAT, THREAT_PROVENANCE, CARD, CARD_PROVENANCE, EXPLANATION, MILESTONE, MILESTONE_PROVENANCE
+from src.context import build_analysis_context
+from tests.test_context import (
+    CARD,
+    CARD_PROVENANCE,
+    EXPLANATION,
+    MILESTONE,
+    MILESTONE_PROVENANCE,
+    THREAT,
+    THREAT_PROVENANCE,
+)
+
 
 def build_fake_review_record(decision="approve"):
     context = build_analysis_context(
@@ -113,7 +122,7 @@ def test_crash_between_github_and_marker(tmp_path, monkeypatch):
     monkeypatch.undo()
     
     # Simulate time passing so it's considered stale
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
     stale_time = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
     marker_path.write_text(json.dumps({"status": "pending", "created_at": stale_time}))
     

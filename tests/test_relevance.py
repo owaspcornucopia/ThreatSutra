@@ -1,9 +1,12 @@
-from unittest.mock import Mock, patch
-import pytest
 from dataclasses import FrozenInstanceError
-from src.relevance import assess_relevance, RelevanceAssessment
+from unittest.mock import Mock, patch
+
+import pytest
+
 from src.adapters.GitHubIssueClient import GitHubIssueClient
+from src.relevance import RelevanceAssessment, assess_relevance
 from tests.test_context import build_context
+
 
 def test_assess_relevance_returns_assessment():
     mock_call_ai_model = Mock(return_value='{"score": 8, "explanation": "Highly relevant."}')

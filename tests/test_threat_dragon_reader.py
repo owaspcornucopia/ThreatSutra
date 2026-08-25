@@ -1,8 +1,10 @@
 #Tests for ThreatDragonReader
 import pytest
+
 from src.adapters.ThreatDragonReader import ThreatDragonReader
 from src.context import extract_milestone_number
 from src.validation import ValidationError, validate_threat_dragon_document
+
 
 def test_read_threat_source_against_tracked_model():
     """Issue #9's acceptance check: the reader must extract every threat from

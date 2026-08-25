@@ -1,7 +1,9 @@
 """Tests for the AnalysisContext mapping layer."""
 import pytest
+
 from src.context import build_analysis_context, select_milestone
 from src.validation import ValidationError
+
 THREAT = {
     "id": "b95bf6e0-a923-40ee-b9f6-87ac1846e975",
     "number": 3,

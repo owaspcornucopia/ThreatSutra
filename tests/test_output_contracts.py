@@ -1,15 +1,37 @@
 """Tests for output contracts and display safety. """
 import pytest
+
 from src.validation import (
-    ValidationError, _validate_text, _validate_total_length, _validate_list,
-    sanitize_text, validate_card, validate_milestone, validate_threats,
-    validate_milestones, validate_cornucopia_response, validate_context_budget,
-    validate_verification_test, extract_model_text_field, relevance_color_for_score,
-    validate_relevance_assessment, validate_github_issue_reference,
-    neutralize_for_display, validate_export_artifact, validate_review_record,
-    extract_model_json_fields, is_valid_threat, is_valid_card, is_valid_milestone,
-    MAX_FIELD_LENGTH, MAX_TOTAL_LENGTH, MAX_LIST_LENGTH, MAX_ISSUE_BODY_LENGTH,
-    validate_evil_user_story, validate_threat_dragon_document,)
+    MAX_FIELD_LENGTH,
+    MAX_ISSUE_BODY_LENGTH,
+    MAX_LIST_LENGTH,
+    MAX_TOTAL_LENGTH,
+    ValidationError,
+    _validate_list,
+    _validate_text,
+    _validate_total_length,
+    extract_model_json_fields,
+    extract_model_text_field,
+    is_valid_card,
+    is_valid_milestone,
+    is_valid_threat,
+    neutralize_for_display,
+    relevance_color_for_score,
+    sanitize_text,
+    validate_card,
+    validate_context_budget,
+    validate_cornucopia_response,
+    validate_evil_user_story,
+    validate_export_artifact,
+    validate_github_issue_reference,
+    validate_milestone,
+    validate_milestones,
+    validate_relevance_assessment,
+    validate_review_record,
+    validate_threat_dragon_document,
+    validate_threats,
+    validate_verification_test,
+)
 
 VALID_THREAT = {
     "id": "t1", "type": "cornucopia-companion", "cardNumber": "LLM9",

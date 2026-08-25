@@ -4,30 +4,33 @@ inputs,context preparation, AI generation, validation, review, and downstream in
 """
 import logging
 import os
+
 from dotenv import load_dotenv
 from google import genai
 from google.genai import errors as genai_errors
-from src.adapters.ThreatDragonReader import ThreatDragonReader
+
 from src.adapters.CornucopiaClient import CornucopiaClient
 from src.adapters.CornucopiaExplanationClient import CornucopiaExplanationClient
 from src.adapters.GitHubMilestoneClient import GitHubMilestoneClient
+from src.adapters.ThreatDragonReader import ThreatDragonReader
 from src.context import (
     AnalysisContext,
     build_analysis_context,
     extract_milestone_number,
-    select_milestone,)
+    select_milestone,
+)
 from src.prompts import PROMPT_TEMPLATE_VERSION, build_evil_user_story_prompt, build_verification_test_prompt
 from src.validation import (
     ValidationError,
     extract_model_text_field,
     validate_evil_user_story,
-    validate_verification_test,)
+    validate_verification_test,
+)
 
 logger = logging.getLogger(__name__)
 
 class GeminiServiceError(RuntimeError):
     """Raised when the Gemini API returns an expected service failure (e.g. 503, 429)."""
-    pass
 
 load_dotenv()
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "owaspcornucopia/ThreatSutra")

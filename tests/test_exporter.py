@@ -1,5 +1,6 @@
 """Tests for GitHubIssueExporter"""
 import pytest
+
 from src.adapters.GitHubIssueExporter import GitHubIssueExporter
 from src.validation import ValidationError
 
@@ -101,7 +102,7 @@ def test_concurrent_reservation_prevents_duplicate_export(tmp_path):
     assert result["status"] == "already_exported"
 
 def test_stale_pending_marker_is_recovered(tmp_path, monkeypatch):
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
     monkeypatch.setenv("GITHUB_API", "fake-token")
     exporter = make_exporter(tmp_path, dry_run=False)
     key = exporter._idempotency_key(REVIEW_RECORD)
@@ -138,7 +139,7 @@ def test_github_search_for_existing_issue(tmp_path):
     assert exporter._search_github_for_marker("key123") is None
 
 def test_export_with_stale_marker_not_on_github(tmp_path, monkeypatch):
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
     monkeypatch.setenv("GITHUB_API", "fake-token")
     exporter = make_exporter(tmp_path, dry_run=True)
     key = exporter._idempotency_key(REVIEW_RECORD)

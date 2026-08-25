@@ -2,13 +2,25 @@ import json
 import os
 import sys
 from unittest.mock import MagicMock
+
 import pytest
+
 import src.cli
-from src.cli import (ask_for_approval, edit_text,main,print_header,print_relevance,revalidate_edit,review_artifact,save_output,)
+from src.cli import (
+    ask_for_approval,
+    edit_text,
+    main,
+    print_header,
+    print_relevance,
+    revalidate_edit,
+    review_artifact,
+    save_output,
+)
 from src.orchestrator import GeminiServiceError
 from src.relevance import RelevanceAssessment
 from src.validation import ValidationError
 from tests.test_context import build_context
+
 
 def test_print_header(capsys):
     print_header("Test Header")

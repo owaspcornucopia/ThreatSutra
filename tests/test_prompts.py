@@ -1,8 +1,10 @@
 """Tests for prompt builders"""
-from src.prompts import build_evil_user_story_prompt, build_relevance_prompt, build_verification_test_prompt
-from tests.test_context import build_context
-from src.validation import ValidationError
 import pytest
+
+from src.prompts import build_evil_user_story_prompt, build_relevance_prompt, build_verification_test_prompt
+from src.validation import ValidationError
+from tests.test_context import build_context
+
 
 def test_evil_user_story_prompt_delimits_untrusted_content():
     context = build_context()

@@ -7,4 +7,5 @@ ignore = [
     "SIM117",  # Allow nested with statements in tests
     "C408",    # Allow dict() calls
     "TRY004",  # Allow TypeError/RuntimeError mixups from older code
+    "I001",    # Allow flexible import sorting
 ]

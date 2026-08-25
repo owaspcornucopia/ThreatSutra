@@ -1,5 +1,6 @@
 """Tests for CornucopiaExplanationClient's Markdown section parser."""
 import pytest
+
 from src.adapters.CornucopiaExplanationClient import CornucopiaExplanationClient
 from src.validation import ValidationError, validate_explanation_sections
 

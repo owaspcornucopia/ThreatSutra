@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from datetime import datetime, timezone
+
 from src.validation import validate_threat, validate_threat_dragon_document
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
