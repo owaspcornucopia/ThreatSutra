@@ -1,5 +1,6 @@
 [tool.ruff]
 line-length = 120
+
 [tool.ruff.lint]
 ignore = [
     "N999",    # Allow CamelCase module names like GitHubIssueExporter.py
@@ -9,5 +10,18 @@ ignore = [
     "TRY004",  # Allow TypeError/RuntimeError mixups from older code
     "I001",    # Allow flexible import sorting
     "EXE002",  # Ignore executable permission check
+]
 
+[tool.mypy]
+ignore_missing_imports = true
+no_implicit_optional = false
+check_untyped_defs = false
+disallow_untyped_defs = false
+disable_error_code = [
+    "union-attr",
+    "assignment",
+    "arg-type",
+    "var-annotated",
+    "return-value",
+    "return",
 ]
