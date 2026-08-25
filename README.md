@@ -125,6 +125,7 @@ cp .env.example .env
 ## Usage
 
 ```bash
+# Run the full pipeline (dry‑run by default)
 python -m src.cli
 ```
 
@@ -172,11 +173,11 @@ Review records are written to `outputs/` as timestamped JSON files. Export marke
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | **190 / 190 passing** |
-| **Coverage** | **100 %** (906 statements, 0 missed) |
+| **Total tests** | **204 / 204 passing** |
+| **Coverage** | **100 %** (953 statements, 0 missed) |
 | **CI** | ![CI: passing](https://github.com/owaspcornucopia/ThreatSutra/actions/workflows/tests.yml/badge.svg) (Python 3.10, 3.11, 3.12) |
 | **Coverage gate** | `--cov-fail-under=95` enforced in CI |
-| **Lint / Types** | `ruff` and `mypy` clean |
+| **Lint / Types** | `ruff` and `mypy` enforced in CI |
 
 Run the suite locally:
 
