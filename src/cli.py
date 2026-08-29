@@ -119,6 +119,9 @@ def review_artifact(context, artifact: dict, relevance, exporter: GitHubIssueExp
         print(f"\n[DRY RUN] Would create GitHub issue:\nTitle: {result['title']}")
     elif result["status"] == "already_exported":
         print(f"\nAlready exported as {result['marker'].get('github_issue_url')}")
+    elif result["status"] == "error_recoverable":
+        print(f"\n[RETRY] Export could not be completed: {result.get('reason', 'unknown')}. "
+              f"The pending marker has been preserved — re-run to retry.")
     else:
         print(f"\nExported as {result['marker'].get('github_issue_url')}")
 
@@ -137,7 +140,7 @@ def main():
     except GeminiServiceError as exc:
         print(f"\nError: {exc}", file=sys.stderr)
         sys.exit(1)
-    issue_client = GitHubIssueClient()
+    issue_client = GitHubIssueClient(allowed_repos=[GITHUB_REPO])
     exporter = GitHubIssueExporter(repo=GITHUB_REPO)
     if exporter.dry_run:
         print("\n[DRY RUN] GITHUB_API is not set - approved artifacts will be shown, not exported.")

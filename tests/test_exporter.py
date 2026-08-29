@@ -164,50 +164,61 @@ def test_github_search_with_hit_returns_found_true(tmp_path):
 def test_export_with_stale_marker_not_on_github(tmp_path, monkeypatch):
     from datetime import datetime, timezone, timedelta
     monkeypatch.setenv("GITHUB_API", "fake-token")
-    exporter = make_exporter(tmp_path, dry_run=True)
+    exporter = make_exporter(tmp_path, dry_run=False)
     key = exporter._idempotency_key(REVIEW_RECORD)
     marker_path = exporter._marker_path(key)
     stale_time = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
     marker_path.write_text(f'{{"status": "pending", "created_at": "{stale_time}"}}')
-    # Mock search to return NO existing issue
+    # Mock search returns zero results, then POST succeeds
     class MockSession:
         def get(self, *args, **kwargs):
             class MockResponse:
                 def raise_for_status(self): pass
                 def json(self): return {"total_count": 0}
             return MockResponse()
+        def post(self, *args, **kwargs):
+            class MockResponse:
+                def raise_for_status(self): pass
+                def json(self): return {"number": 99, "html_url": "http://gh/99"}
+                status_code = 201
+            return MockResponse()
         def mount(self, *args, **kwargs): pass
     exporter.session = MockSession()
+
     result = exporter.export(REVIEW_RECORD)
-    # Because dry_run=True, after overwriting the stale marker with a new pending one, it returns dry_run
-    assert result["status"] == "dry_run"
+    # Search found zero results → stale marker deleted → retry → POST succeeds
+    assert result["status"] == "created"
 
 def test_recover_pending_marker_missing_date(tmp_path):
     exporter = make_exporter(tmp_path, dry_run=True)
     key = exporter._idempotency_key(REVIEW_RECORD)
     marker_path = exporter._marker_path(key)
     marker_path.write_text('{"status": "pending"}')
-    # Missing date triggers timed_out=True. dry_run search returns {"found": False}, marker unlinks, returns None.
-    assert exporter._recover_pending_marker(marker_path, key, REVIEW_RECORD) is None
-    assert not marker_path.exists()
+    # Missing date triggers timed_out=True. dry_run search returns None (unknown state),
+    # so reconciliation preserves the marker and returns error_recoverable.
+    result = exporter._recover_pending_marker(marker_path, key, REVIEW_RECORD)
+    assert result["status"] == "error_recoverable"
+    assert marker_path.exists()
 
 def test_recover_pending_marker_corrupted_json(tmp_path):
     exporter = make_exporter(tmp_path, dry_run=True)
     key = exporter._idempotency_key(REVIEW_RECORD)
     marker_path = exporter._marker_path(key)
     marker_path.write_text("{not valid json")
-    # Corrupted marker goes to _reconcile_with_github. dry_run search → {"found": False} → unlink → None
-    assert exporter._recover_pending_marker(marker_path, key, REVIEW_RECORD) is None
-    assert not marker_path.exists()
+    # Corrupted marker goes to _reconcile_with_github. dry_run search → None → error_recoverable
+    result = exporter._recover_pending_marker(marker_path, key, REVIEW_RECORD)
+    assert result["status"] == "error_recoverable"
+    assert marker_path.exists()
 
 def test_recover_pending_marker_invalid_date(tmp_path):
     exporter = make_exporter(tmp_path, dry_run=True)
     key = exporter._idempotency_key(REVIEW_RECORD)
     marker_path = exporter._marker_path(key)
     marker_path.write_text('{"status": "pending", "created_at": "bad-date-string"}')
-    # Bad date triggers timed_out=True. dry_run search → {"found": False} → unlink → None
-    assert exporter._recover_pending_marker(marker_path, key, REVIEW_RECORD) is None
-    assert not marker_path.exists()
+    # Bad date triggers timed_out=True. dry_run search → None → error_recoverable
+    result = exporter._recover_pending_marker(marker_path, key, REVIEW_RECORD)
+    assert result["status"] == "error_recoverable"
+    assert marker_path.exists()
 
 def test_search_github_for_marker_request_exception(tmp_path):
     """Issue #26: network error during search returns None (distinct from {"found": False})."""
@@ -292,9 +303,9 @@ def test_malformed_marker_before_recovery_does_not_crash(tmp_path):
     key = exporter._idempotency_key(REVIEW_RECORD)
     marker_path = exporter._marker_path(key)
     marker_path.write_text("THIS IS NOT JSON AT ALL!!!")
-    # dry_run recovery: malformed → reconcile → search(dry_run) → {"found": False} → unlink → retry → dry_run
+    # dry_run recovery: malformed → reconcile → search(dry_run) returns None → error_recoverable
     result = exporter.export(REVIEW_RECORD)
-    assert result["status"] == "dry_run"
+    assert result["status"] == "error_recoverable"
 
 def test_search_failure_preserves_pending_marker(tmp_path, monkeypatch):
     """  if search fails with a network error, the pending marker must be preserved."""
@@ -319,13 +330,23 @@ def test_search_failure_preserves_pending_marker(tmp_path, monkeypatch):
     assert marker_path.exists()
 
 def test_search_success_zero_results_deletes_stale_marker(tmp_path, monkeypatch):
-    """ search succeeds with zero results → safe to delete stale marker and retry."""
+    """Issue #26: search succeeds with zero results → safe to delete stale marker and retry."""
     from datetime import datetime, timezone, timedelta
-    exporter = make_exporter(tmp_path, dry_run=True)
+    monkeypatch.setenv("GITHUB_API", "fake-token")
+    exporter = make_exporter(tmp_path, dry_run=False)
     key = exporter._idempotency_key(REVIEW_RECORD)
     marker_path = exporter._marker_path(key)
     stale_time = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
     marker_path.write_text(f'{{"status": "pending", "created_at": "{stale_time}"}}')
+
+    class MockSession:
+        def get(self, *args, **kwargs):
+            class MockResponse:
+                def raise_for_status(self): pass
+                def json(self): return {"total_count": 0}
+            return MockResponse()
+        def mount(self, *args, **kwargs): pass
+    exporter.session = MockSession()
 
     result = exporter._reconcile_with_github(marker_path, key, REVIEW_RECORD)
     assert result is None
@@ -363,10 +384,10 @@ def test_unsupported_schema_version_triggers_reconciliation(tmp_path):
     key = exporter._idempotency_key(REVIEW_RECORD)
     marker_path = exporter._marker_path(key)
     marker_path.write_text('{"status": "pending", "schema_version": "999", "created_at": "2026-01-01T00:00:00+00:00"}')
-    # dry_run → search returns {"found": False} → unlink → None
+    # dry_run → search returns None → error_recoverable, marker preserved
     result = exporter._recover_pending_marker(marker_path, key, REVIEW_RECORD)
-    assert result is None
-    assert not marker_path.exists()
+    assert result["status"] == "error_recoverable"
+    assert marker_path.exists()
 
 def test_completed_marker_includes_schema_version(tmp_path, monkeypatch):
     """ completed markers must persist schema_version."""
@@ -386,19 +407,19 @@ def test_completed_marker_includes_schema_version(tmp_path, monkeypatch):
     saved = json.loads(exporter._marker_path(key).read_text())
     assert saved["schema_version"] == MARKER_SCHEMA_VERSION
 
-def test_dry_run_search_returns_found_false(tmp_path):
-    """ dry_run search returns {"found": False}, not None."""
+def test_dry_run_search_returns_none(tmp_path):
+    """Issue #26: dry_run search returns None (unknown remote state), not {"found": False}."""
     exporter = make_exporter(tmp_path, dry_run=True)
     result = exporter._search_github_for_marker("key123")
-    assert result == {"found": False}
+    assert result is None
 
-def test_no_token_search_returns_found_false(tmp_path, monkeypatch):
-    """ no-token search returns {"found": False}, not None."""
+def test_no_token_search_returns_none(tmp_path, monkeypatch):
+    """Issue #26: no-token search returns None (unknown remote state), not {"found": False}."""
     monkeypatch.delenv("GITHUB_API", raising=False)
     exporter = make_exporter(tmp_path, dry_run=False)
     exporter.token = None
     result = exporter._search_github_for_marker("key123")
-    assert result == {"found": False}
+    assert result is None
 
 def test_malformed_marker_with_search_failure_returns_error_recoverable(tmp_path, monkeypatch):
     """ malformed marker in FileExistsError path + search failure →
@@ -420,3 +441,31 @@ def test_malformed_marker_with_search_failure_returns_error_recoverable(tmp_path
     assert result["reason"] == "search_failed"
     # Marker must still exist (preserved for future recovery)
     assert marker_path.exists()
+
+def test_malformed_marker_with_search_zero_results_retries_and_creates(tmp_path, monkeypatch):
+    """Covers lines 225-226: malformed marker in except JSONDecodeError, search succeeds
+    with zero results → recovery returns None → overwrite with fresh pending → POST succeeds."""
+    monkeypatch.setenv("GITHUB_API", "fake-token")
+    exporter = make_exporter(tmp_path, dry_run=False)
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    marker_path = exporter._marker_path(key)
+    marker_path.write_text("CORRUPT MARKER FILE")
+
+    class MockSession:
+        def get(self, *args, **kwargs):
+            class MockResponse:
+                def raise_for_status(self): pass
+                def json(self): return {"total_count": 0}
+            return MockResponse()
+        def post(self, *args, **kwargs):
+            class MockResponse:
+                def raise_for_status(self): pass
+                def json(self): return {"number": 88, "html_url": "http://gh/88"}
+                status_code = 201
+            return MockResponse()
+        def mount(self, *args, **kwargs): pass
+    exporter.session = MockSession()
+
+    result = exporter.export(REVIEW_RECORD)
+    assert result["status"] == "created"
+    assert result["marker"]["github_issue_number"] == 88

@@ -95,7 +95,7 @@ class GitHubIssueExporter:
           None                             – search failed (network/auth error), remote state unknown
         """
         if self.dry_run or not self.token:
-            return {"found": False}
+            return None
 
         url = "https://api.github.com/search/issues"
         params = {"q": f"repo:{self.repo} in:body threatsutra-marker:{key}"}

@@ -314,6 +314,32 @@ def test_review_artifact_created(monkeypatch, capsys, tmp_path):
     captured = capsys.readouterr()
     assert "Exported as url456" in captured.out
 
+def test_review_artifact_error_recoverable(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(src.cli, "ask_for_approval", lambda: "approve")
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    monkeypatch.setattr(src.cli, "__file__", str(src_dir / "cli.py"))
+    exporter = MagicMock()
+    exporter.export.return_value = {
+        "status": "error_recoverable",
+        "reason": "search_failed",
+    }
+    context = build_context()
+    artifact = {
+        "artifact_type": "evil_user_story",
+        "text": "text",
+        "source_threat_id": "T1",
+        "source_card_id": "C1",
+        "source_milestone_number": 1,
+    }
+    relevance = RelevanceAssessment(
+        score=8, color="green", explanation="Relevant", assessed_issue_urls=()
+    )
+    review_artifact(context, artifact, relevance, exporter)
+    captured = capsys.readouterr()
+    assert "[RETRY]" in captured.out
+    assert "search_failed" in captured.out
+
 def test_main_gemini_service_error_exits(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["cli.py"])
     def mock_run():
