@@ -105,16 +105,33 @@ class GitHubIssueExporter:
             response = self.session.get(url, headers=headers, params=params, timeout=self.timeout)
             response.raise_for_status()
             data = response.json()
-            if data.get("total_count", 0) > 0:
-                issue = data["items"][0]
-                return {
-                    "found": True,
-                    "issue": {
-                        "github_issue_number": issue.get("number"),
-                        "github_issue_url": issue.get("html_url"),
-                    },
-                }
-            return {"found": False}
+            if not isinstance(data, dict):
+                return None  # Invalid response format, treat as unknown
+
+            total_count = data.get("total_count", 0)
+            if not isinstance(total_count, int) or total_count <= 0:
+                return {"found": False}
+
+            items = data.get("items", [])
+            if not isinstance(items, list) or not items:
+                return None  # Bad shape: claims count > 0 but no items array
+
+            issue = items[0]
+            if not isinstance(issue, dict):
+                return None  # Bad shape: item is not an object
+
+            number = issue.get("number")
+            html_url = issue.get("html_url")
+            if number is None or html_url is None:
+                return None  # Missing essential fields
+
+            return {
+                "found": True,
+                "issue": {
+                    "github_issue_number": number,
+                    "github_issue_url": html_url,
+                },
+            }
         except requests.RequestException:
             return None
 
@@ -160,8 +177,10 @@ class GitHubIssueExporter:
         """
         try:
             existing_marker = json.loads(marker_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            # Malformed or unreadable marker — try remote reconciliation before deleting
+            if not isinstance(existing_marker, dict):
+                raise ValueError("JSON is valid but not a dictionary")
+        except (json.JSONDecodeError, OSError, ValueError):
+            # Malformed, non-dict, or unreadable marker — try remote reconciliation before deleting
             return self._reconcile_with_github(marker_path, key, review_record)
 
         # Handle unsupported schema versions explicitly
@@ -216,8 +235,10 @@ class GitHubIssueExporter:
         except FileExistsError:
             try:
                 marker_data = json.loads(marker_path.read_text())
-            except (json.JSONDecodeError, OSError):
-                # Malformed or unreadable existing marker — attempt recovery
+                if not isinstance(marker_data, dict):
+                    raise ValueError("JSON is valid but not a dictionary")
+            except (json.JSONDecodeError, OSError, ValueError):
+                # Malformed, non-dict, or unreadable existing marker — attempt recovery
                 recovered = self._recover_pending_marker(marker_path, key, review_record)
                 if recovered is not None:
                     return recovered

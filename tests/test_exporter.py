@@ -270,6 +270,12 @@ def test_failed_github_post_preserves_pending_marker(tmp_path, monkeypatch):
     assert marker_path.exists()
     saved = json.loads(marker_path.read_text())
     assert saved["status"] == "pending"
+    assert "schema_version" in saved
+    assert saved["schema_version"] == "2"
+    assert "created_at" in saved
+    # Ensure it looks like an ISO format timestamp
+    from datetime import datetime
+    assert datetime.fromisoformat(saved["created_at"])
 
 # new tests for schema_version, crash recovery, search distinction ----
 
@@ -297,13 +303,20 @@ def test_pending_marker_includes_schema_version(tmp_path, monkeypatch):
     assert data["status"] == "pending"
 
 def test_malformed_marker_before_recovery_does_not_crash(tmp_path):
-    """Issue #26: json.loads() on a malformed marker in the FileExistsError path
-    must not crash; it must enter recovery safely."""
+    """ malformed JSON (or valid JSON that isn't a dict) doesn't crash."""
     exporter = make_exporter(tmp_path, dry_run=True)
     key = exporter._idempotency_key(REVIEW_RECORD)
     marker_path = exporter._marker_path(key)
+    
+    # Test 1: Completely invalid JSON
     marker_path.write_text("THIS IS NOT JSON AT ALL!!!")
     # dry_run recovery: malformed → reconcile → search(dry_run) returns None → error_recoverable
+    result = exporter.export(REVIEW_RECORD)
+    assert result["status"] == "error_recoverable"
+
+    # Test 2: Valid JSON but not a dictionary (Issue #4)
+    marker_path.unlink()
+    marker_path.write_text('["this", "is", "a", "list"]')
     result = exporter.export(REVIEW_RECORD)
     assert result["status"] == "error_recoverable"
 
@@ -469,3 +482,28 @@ def test_malformed_marker_with_search_zero_results_retries_and_creates(tmp_path,
     result = exporter.export(REVIEW_RECORD)
     assert result["status"] == "created"
     assert result["marker"]["github_issue_number"] == 88
+
+@pytest.mark.parametrize("mock_response_data", [
+    [],  # Not a dict (line 109)
+    {"total_count": 1, "items": {}},  # items not a list (line 117)
+    {"total_count": 1, "items": []},  # items empty (line 117)
+    {"total_count": 1, "items": ["not an object"]},  # item not dict (line 121)
+    {"total_count": 1, "items": [{"number": 1}]},  # missing html_url (line 126)
+    {"total_count": 1, "items": [{"html_url": "url"}]},  # missing number (line 126)
+])
+def test_search_github_for_marker_bad_shapes(tmp_path, monkeypatch, mock_response_data):
+    """Issue #26: Handle unexpected GitHub API JSON shapes defensively."""
+    monkeypatch.setenv("GITHUB_API", "fake-token")
+    exporter = make_exporter(tmp_path, dry_run=False)
+    
+    class MockSession:
+        def get(self, *args, **kwargs):
+            class MockResponse:
+                def raise_for_status(self): pass
+                def json(self): return mock_response_data
+            return MockResponse()
+        def mount(self, *args, **kwargs): pass
+    exporter.session = MockSession()
+
+    result = exporter._search_github_for_marker("key123")
+    assert result is None
