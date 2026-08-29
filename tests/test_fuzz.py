@@ -4,8 +4,6 @@ Decision: Using deterministic generators to avoid adding hypothesis as a depende
 If Johan approves, switch to hypothesis for broader coverage.
 Commit note: "fuzz tests use deterministic generators — switch to hypothesis later if approved"
 """
-
-import json
 import pytest
 from src.adapters.GitHubIssueClient import GitHubIssueClient
 from src.validation import (

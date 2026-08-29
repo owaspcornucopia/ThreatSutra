@@ -272,7 +272,6 @@ def test_pending_marker_includes_schema_version(tmp_path, monkeypatch):
     # In this case the marker is cleaned up before raise.  Use dry_run instead:
     exporter2 = make_exporter(tmp_path, dry_run=True)
     # Peek at the pending marker by intercepting before unlink
-    import os
     key = exporter2._idempotency_key(REVIEW_RECORD)
     marker_path = exporter2._marker_path(key)
     pending_content = json.dumps({
