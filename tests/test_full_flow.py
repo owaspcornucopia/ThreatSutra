@@ -1,10 +1,8 @@
 import json
 from pathlib import Path
 from unittest.mock import MagicMock
-
 import pytest
 import requests
-
 from src.adapters.GitHubIssueExporter import GitHubIssueExporter
 from src.context import build_analysis_context
 from tests.test_context import (
@@ -16,7 +14,6 @@ from tests.test_context import (
     THREAT,
     THREAT_PROVENANCE,
 )
-
 
 def build_fake_review_record(decision="approve"):
     context = build_analysis_context(

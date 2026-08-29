@@ -9,7 +9,6 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
-
 from src.adapters.GitHubIssueClient import GitHubIssueClient
 from src.adapters.GitHubIssueExporter import GitHubIssueExporter
 from src.orchestrator import (
@@ -22,7 +21,6 @@ from src.orchestrator import (
 )
 from src.relevance import assess_relevance
 from src.validation import ValidationError, neutralize_for_display, validate_evil_user_story, validate_verification_test
-
 
 def print_header(text: str) -> None:
     print("\n" + "=" * 60)
@@ -59,7 +57,7 @@ def save_output(context, artifact: dict, relevance, decision: str) -> str:
     output_dir = os.path.join(project_root, "outputs")
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now(timezone.utc).isoformat()
-    filename = f"review_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
+    filename = f"review_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')}.json"
     output_path = os.path.join(output_dir, filename)
     output_data = {
         "timestamp": timestamp,

@@ -189,7 +189,7 @@ def test_issue_valid():
     session = MagicMock(spec=requests.Session)
     json_data = {"number": 5, "title": "Issue title", "body": "Issue body", "html_url": "http://issue/5"}
     session.get.return_value = make_mock_response(json_data=json_data)
-    client = GitHubIssueClient(session=session)
+    client = GitHubIssueClient(session=session, allowed_repos=["repo/name"])
     issue = client.get_issue("https://github.com/repo/name/issues/5")
     assert issue["number"] == 5
     assert issue["body"] == "Issue body"
@@ -204,7 +204,7 @@ def test_issue_body_none():
     session = MagicMock(spec=requests.Session)
     json_data = {"number": 5, "title": "Issue title", "body": None, "html_url": "http://issue/5"}
     session.get.return_value = make_mock_response(json_data=json_data)
-    client = GitHubIssueClient(session=session)
+    client = GitHubIssueClient(session=session, allowed_repos=["repo/name"])
     issue = client.get_issue("https://github.com/repo/name/issues/5")
     assert issue["body"] == ""
 
@@ -212,7 +212,7 @@ def test_issue_cache_reuse():
     session = MagicMock(spec=requests.Session)
     json_data = {"number": 5, "title": "Issue title", "body": "Issue body", "html_url": "http://issue/5"}
     session.get.return_value = make_mock_response(json_data=json_data)
-    client = GitHubIssueClient(session=session)
+    client = GitHubIssueClient(session=session, allowed_repos=["repo/name"])
     client.get_issue("https://github.com/repo/name/issues/5")
     client.get_issue("https://github.com/repo/name/issues/5")
     session.get.assert_called_once()
@@ -220,17 +220,16 @@ def test_issue_cache_reuse():
 def test_issue_timeout():
     session = MagicMock(spec=requests.Session)
     session.get.side_effect = requests.RequestException("Timeout")
-    client = GitHubIssueClient(session=session)
+    client = GitHubIssueClient(session=session, allowed_repos=["repo/name"])
     with pytest.raises(RuntimeError):
         client.get_issue("https://github.com/repo/name/issues/5")
 
-def test_issue_client_allows_all_when_no_allowlist():
+def test_issue_client_deny_by_default_rejects_when_no_allowlist():
+    """Issue #26: deny-by-default ΓÇö empty allowlist rejects all repos."""
     session = MagicMock(spec=requests.Session)
-    json_data = {"number": 5, "title": "Issue title", "body": "Issue body", "html_url": "http://issue/5"}
-    session.get.return_value = make_mock_response(json_data=json_data)
     client = GitHubIssueClient(session=session)  # no allowed_repos
-    issue = client.get_issue("https://github.com/evil-org/evil-repo/issues/5")
-    assert issue["number"] == 5
+    with pytest.raises(ValueError, match="is not in the configured allow-list"):
+        client.get_issue("https://github.com/evil-org/evil-repo/issues/5")
 
 def test_issue_client_rejects_disallowed_repo():
     session = MagicMock(spec=requests.Session)
@@ -340,7 +339,7 @@ def test_issue_client_with_token(monkeypatch):
     session = MagicMock(spec=requests.Session)
     json_data = {"number": 5, "title": "Issue title", "body": "Issue body", "html_url": "http://issue/5"}
     session.get.return_value = make_mock_response(json_data=json_data)
-    client = GitHubIssueClient(session=session)
+    client = GitHubIssueClient(session=session, allowed_repos=["repo/name"])
     issue = client.get_issue("https://github.com/repo/name/issues/5")
     assert issue["number"] == 5
 
@@ -349,7 +348,7 @@ def test_issue_client_invalid_json():
     resp = make_mock_response(text="not json")
     resp.json.side_effect = ValueError("No JSON")
     session.get.return_value = resp
-    client = GitHubIssueClient(session=session)
+    client = GitHubIssueClient(session=session, allowed_repos=["repo/name"])
     with pytest.raises(RuntimeError, match="not valid JSON"):
         client.get_issue("https://github.com/repo/name/issues/5")
 
@@ -357,7 +356,7 @@ def test_issue_client_get_issues():
     session = MagicMock(spec=requests.Session)
     json_data = {"number": 5, "title": "Issue title", "body": "Issue body", "html_url": "http://issue/5"}
     session.get.return_value = make_mock_response(json_data=json_data)
-    client = GitHubIssueClient(session=session)
+    client = GitHubIssueClient(session=session, allowed_repos=["repo/name"])
     issues = client.get_issues(["https://github.com/repo/name/issues/5"])
     assert len(issues) == 1
 
@@ -425,3 +424,107 @@ def test_explanation_fetch_error():
     session.get.side_effect = requests.RequestException("download failed")
     with pytest.raises(RuntimeError, match="Could not retrieve Cornucopia explanation"):
         client.get_explanation("companion", "LLM9")
+
+# URL validation, case normalization, authenticated headers 
+
+def test_issue_client_rejects_url_with_query_string():
+    """ fullmatch rejects query strings."""
+    session = MagicMock(spec=requests.Session)
+    client = GitHubIssueClient(session=session, allowed_repos=["owner/repo"])
+    with pytest.raises(ValueError):
+        client.get_issue("https://github.com/owner/repo/issues/5?foo=bar")
+
+def test_issue_client_rejects_url_with_fragment():
+    """ fullmatch rejects URL fragments."""
+    session = MagicMock(spec=requests.Session)
+    client = GitHubIssueClient(session=session, allowed_repos=["owner/repo"])
+    with pytest.raises(ValueError):
+        client.get_issue("https://github.com/owner/repo/issues/5#section")
+
+def test_issue_client_rejects_url_with_trailing_path():
+    """ fullmatch rejects trailing path segments."""
+    session = MagicMock(spec=requests.Session)
+    client = GitHubIssueClient(session=session, allowed_repos=["owner/repo"])
+    with pytest.raises(ValueError):
+        client.get_issue("https://github.com/owner/repo/issues/5/comments")
+
+def test_issue_client_normalizes_owner_repo_case():
+    """ case-insensitive repo matching."""
+    session = MagicMock(spec=requests.Session)
+    json_data = {"number": 5, "title": "Issue title", "body": "Issue body", "html_url": "http://issue/5"}
+    session.get.return_value = make_mock_response(json_data=json_data)
+    # Allowlist uses uppercase
+    client = GitHubIssueClient(session=session, allowed_repos=["OwaspCornucopia/ThreatSutra"])
+    # URL uses lowercase ΓÇö should still match
+    issue = client.get_issue("https://github.com/owaspcornucopia/ThreatSutra/issues/5")
+    assert issue["number"] == 5
+
+def test_issue_client_additional_configured_repo_accepted():
+    """Multiple repos in allowlist all accepted."""
+    session = MagicMock(spec=requests.Session)
+    json_data = {"number": 1, "title": "T", "body": "B", "html_url": "http://issue/1"}
+    session.get.return_value = make_mock_response(json_data=json_data)
+    client = GitHubIssueClient(
+        session=session,
+        allowed_repos=["owaspcornucopia/ThreatSutra", "other-org/other-repo"]
+    )
+    issue = client.get_issue("https://github.com/other-org/other-repo/issues/1")
+    assert issue["number"] == 1
+
+def test_milestone_client_sends_auth_header(monkeypatch):
+    """ authenticated requests send Authorization header without leaking secrets."""
+    monkeypatch.setenv("GITHUB_API", "test-secret-token")
+    session = MagicMock(spec=requests.Session)
+    json_data = [{"number": 1, "title": "Phase 1", "description": "D", "state": "open"}]
+    session.get.return_value = make_mock_response(json_data=json_data)
+    client = GitHubMilestoneClient("repo/name", session=session)
+    client.get_milestones()
+    # Verify Authorization header was sent
+    call_args = session.get.call_args
+    headers = call_args[1].get("headers", call_args.kwargs.get("headers", {}))
+    assert "Authorization" in headers
+    assert headers["Authorization"].startswith("Bearer ")
+    # Verify the exact token is used (without printing it)
+    assert headers["Authorization"] == f"Bearer {client.token}"
+
+def test_issue_client_sends_auth_header(monkeypatch):
+    """ GitHubIssueClient sends Authorization header without leaking secrets."""
+    monkeypatch.setenv("GITHUB_API", "test-secret-token")
+    session = MagicMock(spec=requests.Session)
+    json_data = {"number": 5, "title": "T", "body": "B", "html_url": "http://issue/5"}
+    session.get.return_value = make_mock_response(json_data=json_data)
+    client = GitHubIssueClient(session=session, allowed_repos=["repo/name"])
+    client.get_issue("https://github.com/repo/name/issues/5")
+    call_args = session.get.call_args
+    headers = call_args[1].get("headers", call_args.kwargs.get("headers", {}))
+    assert "Authorization" in headers
+    assert headers["Authorization"].startswith("Bearer ")
+    assert headers["Authorization"] == f"Bearer {client.token}"
+
+def test_exporter_sends_auth_header_on_post(tmp_path, monkeypatch):
+    """ exporter POST sends Authorization header without leaking the token value."""
+    monkeypatch.setenv("GITHUB_API", "test-secret-token")
+    session = MagicMock(spec=requests.Session)
+    resp = make_mock_response(status_code=201, json_data={"number": 1, "html_url": "http://gh/1"})
+    session.post.return_value = resp
+    exporter = GitHubIssueExporter(repo="owner/repo", dry_run=False, markers_dir=str(tmp_path), session=session)
+    exporter.export(EXPORTER_REVIEW_RECORD)
+    call_args = session.post.call_args
+    headers = call_args[1].get("headers", call_args.kwargs.get("headers", {}))
+    assert "Authorization" in headers
+    assert headers["Authorization"].startswith("Bearer ")
+    assert headers["Authorization"] == f"Bearer {exporter.token}"
+
+def test_exporter_sends_auth_header_on_search(tmp_path, monkeypatch):
+    """ exporter search sends Authorization header without leaking the token value."""
+    monkeypatch.setenv("GITHUB_API", "test-secret-token")
+    session = MagicMock(spec=requests.Session)
+    resp = make_mock_response(json_data={"total_count": 0})
+    session.get.return_value = resp
+    exporter = GitHubIssueExporter(repo="owner/repo", dry_run=False, markers_dir=str(tmp_path), session=session)
+    exporter._search_github_for_marker("key123")
+    call_args = session.get.call_args
+    headers = call_args[1].get("headers", call_args.kwargs.get("headers", {}))
+    assert "Authorization" in headers
+    assert headers["Authorization"].startswith("Bearer ")
+    assert headers["Authorization"] == f"Bearer {exporter.token}"

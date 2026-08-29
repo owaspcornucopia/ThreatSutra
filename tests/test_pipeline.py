@@ -1,7 +1,5 @@
 from unittest.mock import MagicMock
-
 import pytest
-
 from src.context import AnalysisContext
 from src.orchestrator import run_pipeline
 
@@ -31,7 +29,6 @@ class FakeThreatDragonReader:
 
 def test_run_pipeline():
     reader = FakeThreatDragonReader()
-    
     milestone_client = MagicMock()
     milestone_client.get_milestones.return_value = [
         {"number": 1, "title": "Phase 1", "description": "Phase.", "state": "open"}
@@ -82,57 +79,6 @@ def test_run_pipeline():
     assert ctx.threat_id == "t1"
     assert ctx.card_id == "LLM9"
     assert ctx.milestone_number == 1
-
-"""
-def test_run_pipeline():
-    reader = FakeThreatDragonReader()
-    milestone_client = MagicMock()
-    milestone_client.get_milestones.return_value = [
-        {"number": 1, "title": "Phase 1", "description": "Phase.", "state": "open"}
-    ]
-    milestone_client.get_provenance.return_value = {
-        "source_type": "github_milestones",
-        "location": "loc",
-        "retrieved_at": "2026-08-06T00:00:00+00:00",
-        "content_hash": "b"
-    }
-    cornucopia_client = MagicMock()
-    cornucopia_client.find_card.return_value = {
-        "sectionID": "LLM9", "name": "LLM9", "description": "Card desc.", "section": "LLM Top 10"
-    }
-    cornucopia_client.get_card_provenance.return_value = {
-        "source_type": "cornucopia_api",
-        "location": "loc",
-        "retrieved_at": "2026-08-06T00:00:00+00:00",
-        "content_hash": "c",
-        "api_version": "1.0"
-    }
-    explanation_client = MagicMock()
-    explanation_client.get_explanation.return_value = {
-        "scenario": "Scen",
-        "what_can_go_wrong": "Wrong",
-        "requirement": "Req",
-        "mitigation": "Mitig",
-        "provenance": {
-            "source_type": "cornucopia_explanation",
-            "location": "loc",
-            "retrieved_at": "2026-08-06T00:00:00+00:00",
-            "content_hash": "d"
-        }
-    }
-    results = run_pipeline(
-        reader=reader,
-        milestone_client=milestone_client,
-        cornucopia_client=cornucopia_client,
-        explanation_client=explanation_client
-    )
-    assert len(results) == 1
-    ctx = results[0]
-    assert isinstance(ctx, AnalysisContext)
-    assert ctx.threat_id == "t1"
-    assert ctx.card_id == "LLM9"
-    assert ctx.milestone_number == 1
-"""
 
 def test_resolve_edition_unknown_type():
     """Line 58: unknown threat type raises ValueError."""

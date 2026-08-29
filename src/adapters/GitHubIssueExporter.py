@@ -7,11 +7,9 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-
 from src.validation import (
     sanitize_text,
     validate_export_artifact,
@@ -90,16 +88,19 @@ class GitHubIssueExporter:
 
     def _search_github_for_marker(self, key: str) -> dict | None:
         """
-        Searches GitHub for an issue with the given marker to recover from interrupted exports.
-        Security rationale: Prevents duplicate issues and handles state mismatch safely without manual intervention.
+        Searches GitHub for an issue containing the given marker.
+        Returns (three-state distinction):
+          {"found": True, "issue": {...}}  – search succeeded, marker found on GitHub
+          {"found": False}                 – search succeeded with zero results (or dry-run/no-token)
+          None                             – search failed (network/auth error), remote state unknown
         """
         if self.dry_run or not self.token:
-            return None
-            
+            return {"found": False}
+
         url = "https://api.github.com/search/issues"
         params = {"q": f"repo:{self.repo} in:body threatsutra-marker:{key}"}
         headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {self.token}"}
-        
+
         try:
             response = self.session.get(url, headers=headers, params=params, timeout=self.timeout)
             response.raise_for_status()
@@ -107,24 +108,67 @@ class GitHubIssueExporter:
             if data.get("total_count", 0) > 0:
                 issue = data["items"][0]
                 return {
-                    "github_issue_number": issue.get("number"),
-                    "github_issue_url": issue.get("html_url")
+                    "found": True,
+                    "issue": {
+                        "github_issue_number": issue.get("number"),
+                        "github_issue_url": issue.get("html_url"),
+                    },
                 }
+            return {"found": False}
         except requests.RequestException:
-            pass
+            return None
+
+    def _reconcile_with_github(self, marker_path: Path, key: str, review_record: dict) -> dict | None:
+        """
+        Reconciles a stale, malformed, or unsupported-version pending marker with GitHub.
+        Only deletes the marker after a successful search confirms no remote issue exists.
+        """
+        search_result = self._search_github_for_marker(key)
+
+        if search_result is None:
+            # Search failed — cannot determine remote state.  Preserve the marker so a
+            # future run can retry reconciliation instead of creating a duplicate issue.
+            return {"status": "error_recoverable", "reason": "search_failed"}
+
+        if search_result.get("found"):
+            github_data = search_result["issue"]
+            marker = {
+                "idempotency_key": key,
+                "artifact_type": review_record["artifact_type"],
+                "source_threat_id": review_record["source_threat_id"],
+                "source_card_id": review_record["source_card_id"],
+                "github_issue_number": github_data["github_issue_number"],
+                "github_issue_url": github_data["github_issue_url"],
+                "model": review_record.get("model"),
+                "prompt_template_version": review_record.get("prompt_template_version"),
+                "relevance": review_record.get("relevance"),
+                "provenance": review_record.get("provenance"),
+                "schema_version": MARKER_SCHEMA_VERSION,
+            }
+            marker_path.write_text(json.dumps(marker, indent=2))
+            return {"status": "already_exported", "marker": marker}
+
+        # Search succeeded, no match — safe to delete and allow a controlled retry.
+        marker_path.unlink(missing_ok=True)
         return None
 
     def _recover_pending_marker(self, marker_path: Path, key: str, review_record: dict) -> dict | None:
         """
         Attempts to recover a pending marker that might be stuck due to an interrupted export.
-        Security rationale: Ensures that if an issue was successfully created but the marker wasn't fully written, we don't lose the reference to the issue.
+        Distinguishes malformed markers, unsupported versions, fresh in-flight markers,
+        and stale markers — and only deletes after successful remote reconciliation.
         """
         try:
             existing_marker = json.loads(marker_path.read_text())
-        except json.JSONDecodeError:
-            marker_path.unlink(missing_ok=True)
-            return None
-            
+        except (json.JSONDecodeError, OSError):
+            # Malformed or unreadable marker — try remote reconciliation before deleting
+            return self._reconcile_with_github(marker_path, key, review_record)
+
+        # Handle unsupported schema versions explicitly
+        marker_version = existing_marker.get("schema_version")
+        if marker_version and marker_version != MARKER_SCHEMA_VERSION:
+            return self._reconcile_with_github(marker_path, key, review_record)
+
         created_at_str = existing_marker.get("created_at")
         if not created_at_str:
             timed_out = True
@@ -136,26 +180,9 @@ class GitHubIssueExporter:
                 timed_out = True
 
         if timed_out:
-            github_data = self._search_github_for_marker(key)
-            if github_data:
-                marker = {
-                    "idempotency_key": key,
-                    "artifact_type": review_record["artifact_type"],
-                    "source_threat_id": review_record["source_threat_id"],
-                    "source_card_id": review_record["source_card_id"],
-                    "github_issue_number": github_data["github_issue_number"],
-                    "github_issue_url": github_data["github_issue_url"],
-                    "model": review_record.get("model"),
-                    "prompt_template_version": review_record.get("prompt_template_version"),
-                    "relevance": review_record.get("relevance"),
-                    "provenance": review_record.get("provenance"),
-                }
-                marker_path.write_text(json.dumps(marker, indent=2))
-                return {"status": "already_exported", "marker": marker}
-            else:
-                marker_path.unlink(missing_ok=True)
-                return None
-        
+            return self._reconcile_with_github(marker_path, key, review_record)
+
+        # Fresh marker, not timed out — treat as in-flight
         return {"status": "already_exported", "marker": existing_marker}
 
     def export(self, review_record: dict) -> dict:
@@ -175,22 +202,38 @@ class GitHubIssueExporter:
         validate_export_artifact(artifact)
         key = self._idempotency_key(review_record)
         marker_path = self._marker_path(key)
-        
+
+        pending_content = json.dumps({
+            "status": "pending",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "schema_version": MARKER_SCHEMA_VERSION,
+        })
+
         try:
             fd = os.open(marker_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             with os.fdopen(fd, "w") as f:
-                f.write(json.dumps({"status": "pending", "created_at": datetime.now(timezone.utc).isoformat()}))
+                f.write(pending_content)
         except FileExistsError:
-            marker_data = json.loads(marker_path.read_text())
-            if marker_data.get("status") == "pending":
+            try:
+                marker_data = json.loads(marker_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                # Malformed or unreadable existing marker — attempt recovery
                 recovered = self._recover_pending_marker(marker_path, key, review_record)
                 if recovered is not None:
                     return recovered
+                # Recovery says retry is safe — overwrite with fresh pending
                 with open(marker_path, "w") as f:
-                    f.write(json.dumps({"status": "pending", "created_at": datetime.now(timezone.utc).isoformat()}))
+                    f.write(pending_content)
             else:
-                return {"status": "already_exported", "marker": marker_data}
-            
+                if marker_data.get("status") == "pending":
+                    recovered = self._recover_pending_marker(marker_path, key, review_record)
+                    if recovered is not None:
+                        return recovered
+                    with open(marker_path, "w") as f:
+                        f.write(pending_content)
+                else:
+                    return {"status": "already_exported", "marker": marker_data}
+
         title, body = self._build_title_and_body(artifact, key)
         if self.dry_run:
             marker_path.unlink()
@@ -207,7 +250,8 @@ class GitHubIssueExporter:
             response.raise_for_status()
             created = response.json()
         except requests.RequestException as exc:
-            marker_path.unlink()
+            # Preserve the pending marker: the POST may have succeeded despite the
+            # client-side error.  A future run will reconcile via _search_github_for_marker.
             raise RuntimeError(f"Could not create GitHub issue for export: {exc}") from exc
         marker = {
             "idempotency_key": key,
@@ -220,6 +264,7 @@ class GitHubIssueExporter:
             "prompt_template_version": review_record.get("prompt_template_version"),
             "relevance": review_record.get("relevance"),
             "provenance": review_record.get("provenance"),
+            "schema_version": MARKER_SCHEMA_VERSION,
         }
         marker_path.write_text(json.dumps(marker, indent=2))
         return {"status": "created", "marker": marker}

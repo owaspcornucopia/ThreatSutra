@@ -101,6 +101,30 @@ def test_save_output(monkeypatch, tmp_path):
     assert data["artifact_type"] == "evil_user_story"
     assert data["relevance"]["score"] == 8
 
+def test_save_output_prevents_duplicate_filenames_via_milliseconds(monkeypatch, tmp_path):
+    """Issue #13: Calling save_output very quickly must not result in identical filenames."""
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    fake_cli_py = src_dir / "cli.py"
+    monkeypatch.setattr(src.cli, "__file__", str(fake_cli_py))
+    context = build_context()
+    artifact = {
+        "artifact_type": "evil_user_story",
+        "text": "test",
+        "source_threat_id": "T1",
+        "source_card_id": "C1",
+        "source_milestone_number": 1,
+    }
+    relevance = RelevanceAssessment(
+        score=8, color="green", explanation="Relevant", assessed_issue_urls=()
+    )
+    out_path_1 = save_output(context, artifact, relevance, "approve")
+    out_path_2 = save_output(context, artifact, relevance, "approve")
+    
+    assert out_path_1 != out_path_2
+    assert os.path.exists(out_path_1)
+    assert os.path.exists(out_path_2)
+
 
 def test_print_relevance_green(capsys):
     relevance = RelevanceAssessment(

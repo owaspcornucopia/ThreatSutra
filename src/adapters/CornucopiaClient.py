@@ -7,11 +7,9 @@ returned standards.
 import hashlib
 import json
 from datetime import datetime, timezone
-
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-
 from src.validation import validate_card, validate_cornucopia_response
 
 BASE_URL = "https://cornucopia.owasp.org/api"

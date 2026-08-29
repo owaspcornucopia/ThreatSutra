@@ -8,11 +8,9 @@ import json
 import os
 import re
 from datetime import datetime, timezone
-
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-
 from src.validation import validate_github_issue_reference
 
 ISSUE_URL_PATTERN = re.compile(r"https://github\.com/([^/]+/[^/]+)/issues/(\d+)")
@@ -22,10 +20,14 @@ RETRY_BACKOFF_FACTOR = 0.5
 RETRY_STATUS_CODES = (429, 500, 502, 503, 504)
 
 class GitHubIssueClient:
-    """Fetches and validates referenced GitHub issues, by URL, with per-instance caching."""
+    """Fetches and validates referenced GitHub issues, by URL, with per-instance caching.
+    Deny-by-default: if no allowed_repos are configured, all repositories are rejected.
+    The CLI passes allowed_repos=[GITHUB_REPO] so only the project's own repo is accessible."""
     def __init__(self, token: str = None, timeout: int = DEFAULT_TIMEOUT_SECONDS,
                  session: requests.Session = None, allowed_repos=None):
-        self.allowed_repos = frozenset(allowed_repos) if allowed_repos else frozenset()
+        self.allowed_repos = frozenset(
+            r.lower() for r in allowed_repos
+        ) if allowed_repos else frozenset()
         self.token = token or os.environ.get("GITHUB_API")
         self.timeout = timeout
         self._cache = {}
@@ -40,18 +42,21 @@ class GitHubIssueClient:
         self.session.mount("https://", HTTPAdapter(max_retries=retry))
 
     def get_issue(self, issue_url: str) -> dict:
-        """Fetches one issue's title and body by its GitHub URL. Read-only - never comments.Includes an allowlist check for the repository."""
+        """Fetches one issue's title and body by its GitHub URL. Read-only - never comments.
+        Uses fullmatch to reject query strings and fragments. Deny-by-default allowlist."""
         if issue_url in self._cache:
             return dict(self._cache[issue_url])
-        match = ISSUE_URL_PATTERN.match(issue_url)
+        match = ISSUE_URL_PATTERN.fullmatch(issue_url)
         if not match:
             raise ValueError(f"'{issue_url}' is not a recognized GitHub issue URL.")
         repo, number = match.group(1), match.group(2)
-        if self.allowed_repos and repo not in self.allowed_repos:
+        normalized_repo = repo.lower()
+        if not self.allowed_repos or normalized_repo not in self.allowed_repos:
             raise ValueError(
                 f"Repository '{repo}' is not in the configured allow-list "
                 f"({sorted(self.allowed_repos)}). To read issues from additional "
-                f"repositories, add them to allowed_repos.")
+                f"repositories, add them to allowed_repos."
+            )
         url = f"https://api.github.com/repos/{repo}/issues/{number}"
         headers = {"Accept": "application/vnd.github+json"}
         if self.token:
