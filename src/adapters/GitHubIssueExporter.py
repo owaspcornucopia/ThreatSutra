@@ -98,7 +98,7 @@ class GitHubIssueExporter:
             return None
 
         url = "https://api.github.com/search/issues"
-        params = {"q": f"repo:{self.repo} in:body threatsutra-marker:{key}"}
+        params = {"q": f"repo:{self.repo} is:issue in:body threatsutra-marker:{key}"}
         headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {self.token}"}
 
         try:
