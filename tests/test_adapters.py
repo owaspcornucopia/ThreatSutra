@@ -225,7 +225,7 @@ def test_issue_timeout():
         client.get_issue("https://github.com/repo/name/issues/5")
 
 def test_issue_client_deny_by_default_rejects_when_no_allowlist():
-    """Issue #26: deny-by-default ΓÇö empty allowlist rejects all repos."""
+    """Issue #26: deny-by-default — empty allowlist rejects all repos."""
     session = MagicMock(spec=requests.Session)
     client = GitHubIssueClient(session=session)  # no allowed_repos
     with pytest.raises(ValueError, match="is not in the configured allow-list"):
