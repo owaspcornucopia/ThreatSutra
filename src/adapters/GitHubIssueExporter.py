@@ -91,8 +91,8 @@ class GitHubIssueExporter:
         Searches GitHub for an issue containing the given marker.
         Returns (three-state distinction):
           {"found": True, "issue": {...}}  – search succeeded, marker found on GitHub
-          {"found": False}                 – search succeeded with zero results (or dry-run/no-token)
-          None                             – search failed (network/auth error), remote state unknown
+          {"found": False}                 – search succeeded with zero results
+          None                             – search failed or could not run, remote state unknown
         """
         if self.dry_run or not self.token:
             return None
