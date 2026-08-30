@@ -92,20 +92,20 @@ def test_export_rejects_any_decision_other_than_approve(tmp_path):
         with pytest.raises(ValidationError):
             exporter.export({**REVIEW_RECORD, "decision": decision})
 
-def test_revised_text_produces_different_idempotency_key(tmp_path):
+def test_revised_text_produces_same_idempotency_key(tmp_path):
     exporter = make_exporter(tmp_path)
     other = {**REVIEW_RECORD, "text": "Revised text"}
-    assert exporter._idempotency_key(REVIEW_RECORD) != exporter._idempotency_key(other)
+    assert exporter._idempotency_key(REVIEW_RECORD) == exporter._idempotency_key(other)
 
 def test_revised_milestone_produces_different_idempotency_key(tmp_path):
     exporter = make_exporter(tmp_path)
     other = {**REVIEW_RECORD, "source_milestone_number": 2}
     assert exporter._idempotency_key(REVIEW_RECORD) != exporter._idempotency_key(other)
 
-def test_revised_template_version_produces_different_idempotency_key(tmp_path):
+def test_revised_template_version_produces_same_idempotency_key(tmp_path):
     exporter = make_exporter(tmp_path)
     other = {**REVIEW_RECORD, "prompt_template_version": "v2"}
-    assert exporter._idempotency_key(REVIEW_RECORD) != exporter._idempotency_key(other)
+    assert exporter._idempotency_key(REVIEW_RECORD) == exporter._idempotency_key(other)
 
 def test_concurrent_reservation_prevents_duplicate_export(tmp_path):
     from datetime import datetime, timezone
@@ -222,11 +222,23 @@ def test_recover_pending_marker_invalid_date(tmp_path):
     exporter = make_exporter(tmp_path, dry_run=True)
     key = exporter._idempotency_key(REVIEW_RECORD)
     marker_path = exporter._marker_path(key)
+    
+    # Test 1: Bad date string (ValueError)
     marker_path.write_text('{"status": "pending", "created_at": "bad-date-string"}')
-    # Bad date triggers timed_out=True. dry_run search → None → error_recoverable
     result = exporter._recover_pending_marker(marker_path, key, REVIEW_RECORD)
     assert result["status"] == "error_recoverable"
-    assert marker_path.exists()
+    
+    # Test 2: Integer timestamp instead of ISO string (TypeError during parse)
+    marker_path.unlink()
+    marker_path.write_text('{"status": "pending", "created_at": 1234567890}')
+    result = exporter._recover_pending_marker(marker_path, key, REVIEW_RECORD)
+    assert result["status"] == "error_recoverable"
+    
+    # Test 3: Timezone-naive ISO string (TypeError during subtraction)
+    marker_path.unlink()
+    marker_path.write_text('{"status": "pending", "created_at": "2026-08-30T12:00:00"}')
+    result = exporter._recover_pending_marker(marker_path, key, REVIEW_RECORD)
+    assert result["status"] == "error_recoverable"
 
 def test_search_github_for_marker_request_exception(tmp_path):
     """Issue #26: network error during search returns None (distinct from {"found": False})."""

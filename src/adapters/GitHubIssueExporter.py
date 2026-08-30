@@ -62,9 +62,8 @@ class GitHubIssueExporter:
     def _idempotency_key(self, review_record: dict) -> str:
         basis = (
             f"{review_record['artifact_type']}:{review_record['source_threat_id']}:"
-            f"{review_record['source_card_id']}:{review_record['text']}:"
-            f"{review_record['source_milestone_number']}:{review_record.get('model')}:"
-            f"{review_record.get('prompt_template_version')}:{MARKER_SCHEMA_VERSION}"
+            f"{review_record['source_card_id']}:{review_record['source_milestone_number']}:"
+            f"{MARKER_SCHEMA_VERSION}"
         )
         return hashlib.sha256(basis.encode("utf-8")).hexdigest()
 
@@ -92,7 +91,7 @@ class GitHubIssueExporter:
         Returns (three-state distinction):
           {"found": True, "issue": {...}}  – search succeeded, marker found on GitHub
           {"found": False}                 – search succeeded with zero results
-          None                             – search failed or could not run, remote state unknown
+          None                             – search failed, dry-run, or no token (remote state unknown)
         """
         if self.dry_run or not self.token:
             return None
@@ -220,9 +219,13 @@ class GitHubIssueExporter:
             timed_out = True
         else:
             try:
-                created_at = datetime.fromisoformat(created_at_str)
-                timed_out = (datetime.now(timezone.utc) - created_at).total_seconds() > PENDING_TIMEOUT_SECONDS
-            except ValueError:
+                created_at = datetime.fromisoformat(str(created_at_str))
+                # If naive, treat as timed out to force reconciliation
+                if created_at.tzinfo is None:
+                    timed_out = True
+                else:
+                    timed_out = (datetime.now(timezone.utc) - created_at).total_seconds() > PENDING_TIMEOUT_SECONDS
+            except (ValueError, TypeError):
                 timed_out = True
 
         if timed_out:
@@ -315,7 +318,8 @@ class GitHubIssueExporter:
         except requests.RequestException as exc:
             # Preserve the pending marker: the POST may have succeeded despite the
             # client-side error.  A future run will reconcile via _search_github_for_marker.
-            raise RuntimeError(f"Could not create GitHub issue for export: {exc}") from exc
+            safe_msg = str(exc).replace(self.token, "***") if self.token else str(exc)
+            raise RuntimeError(f"Could not create GitHub issue for export: {safe_msg}")
         marker = {
             "idempotency_key": key,
             "artifact_type": artifact["artifact_type"],

@@ -66,7 +66,8 @@ class GitHubIssueClient:
             response.raise_for_status()
             payload = response.json()
         except requests.RequestException as exc:
-            raise RuntimeError(f"Could not fetch GitHub issue '{issue_url}': {exc}") from exc
+            safe_msg = str(exc).replace(self.token, "***") if self.token else str(exc)
+            raise RuntimeError(f"Could not fetch GitHub issue '{issue_url}': {safe_msg}")
         except ValueError as exc:
             raise RuntimeError(f"GitHub issue response for '{issue_url}' was not valid JSON.") from exc
         issue = {

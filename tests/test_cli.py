@@ -125,6 +125,42 @@ def test_save_output_prevents_duplicate_filenames_via_milliseconds(monkeypatch, 
     assert os.path.exists(out_path_1)
     assert os.path.exists(out_path_2)
 
+def test_save_output_retries_on_file_exists_error(monkeypatch, tmp_path):
+    """Ensure that save_output retries when os.open raises FileExistsError."""
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    fake_cli_py = src_dir / "cli.py"
+    monkeypatch.setattr(src.cli, "__file__", str(fake_cli_py))
+    
+    # Mock os.open to raise FileExistsError the first time, then succeed
+    original_open = os.open
+    open_calls = 0
+    
+    def mock_open(*args, **kwargs):
+        nonlocal open_calls
+        open_calls += 1
+        if open_calls == 1:
+            raise FileExistsError("Simulated collision")
+        return original_open(*args, **kwargs)
+        
+    monkeypatch.setattr(os, "open", mock_open)
+    
+    context = build_context()
+    artifact = {
+        "artifact_type": "evil_user_story",
+        "text": "test retry",
+        "source_threat_id": "T1",
+        "source_card_id": "C1",
+        "source_milestone_number": 1,
+    }
+    relevance = RelevanceAssessment(score=8, color="green", explanation="Relevant", assessed_issue_urls=())
+    
+    out_path = save_output(context, artifact, relevance, "approve")
+    
+    # It must have called os.open twice (first failed, second succeeded)
+    assert open_calls == 2
+    assert os.path.exists(out_path)
+
 
 def test_print_relevance_green(capsys):
     relevance = RelevanceAssessment(

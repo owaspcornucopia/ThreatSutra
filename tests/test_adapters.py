@@ -225,7 +225,7 @@ def test_issue_timeout():
         client.get_issue("https://github.com/repo/name/issues/5")
 
 def test_issue_client_deny_by_default_rejects_when_no_allowlist():
-    """Issue #26: deny-by-default — empty allowlist rejects all repos."""
+    """Issue #26: deny-by-default - empty allowlist rejects all repos."""
     session = MagicMock(spec=requests.Session)
     client = GitHubIssueClient(session=session)  # no allowed_repos
     with pytest.raises(ValueError, match="is not in the configured allow-list"):
@@ -455,7 +455,7 @@ def test_issue_client_normalizes_owner_repo_case():
     session.get.return_value = make_mock_response(json_data=json_data)
     # Allowlist uses uppercase
     client = GitHubIssueClient(session=session, allowed_repos=["OwaspCornucopia/ThreatSutra"])
-    # URL uses lowercase ΓÇö should still match
+    # URL uses lowercase - should still match
     issue = client.get_issue("https://github.com/owaspcornucopia/ThreatSutra/issues/5")
     assert issue["number"] == 5
 
@@ -528,3 +528,42 @@ def test_exporter_sends_auth_header_on_search(tmp_path, monkeypatch):
     assert "Authorization" in headers
     assert headers["Authorization"].startswith("Bearer ")
     assert headers["Authorization"] == f"Bearer {exporter.token}"
+
+def test_exporter_failure_does_not_leak_token(tmp_path, monkeypatch):
+    """Failure-path test to assert the sentinel token is absent from exception messages."""
+    sentinel_token = "SECRET_TOKEN_DO_NOT_LEAK_12345"
+    monkeypatch.setenv("GITHUB_API", sentinel_token)
+    session = MagicMock(spec=requests.Session)
+    
+    # Simulate a network failure that includes headers or URL in the underlying exception msg
+    simulated_error_msg = f"Failed to connect to github.com. Headers: {{'Authorization': 'Bearer {sentinel_token}'}}"
+    session.post.side_effect = requests.RequestException(simulated_error_msg)
+    
+    exporter = GitHubIssueExporter(repo="owner/repo", dry_run=False, markers_dir=str(tmp_path), session=session)
+    
+    # Exporter catches RequestException and raises a RuntimeError
+    with pytest.raises(RuntimeError) as exc_info:
+        exporter.export(EXPORTER_REVIEW_RECORD)
+    
+    # Assert the token string is NOWHERE in the exception's string representation
+    assert sentinel_token not in str(exc_info.value), "Token leaked in exception message!"
+    assert sentinel_token not in repr(exc_info.value), "Token leaked in exception repr!"
+    assert sentinel_token not in str(exc_info.value.__cause__), "Token leaked in underlying cause!"
+
+def test_issue_client_failure_does_not_leak_token(monkeypatch):
+    """Failure-path test to assert the sentinel token is absent from client exception messages."""
+    sentinel_token = "SECRET_TOKEN_DO_NOT_LEAK_67890"
+    monkeypatch.setenv("GITHUB_API", sentinel_token)
+    session = MagicMock(spec=requests.Session)
+    
+    simulated_error_msg = f"Timeout. Request headers: {{'Authorization': 'Bearer {sentinel_token}'}}"
+    session.get.side_effect = requests.RequestException(simulated_error_msg)
+    
+    client = GitHubIssueClient(session=session, allowed_repos=["owner/repo"])
+    
+    with pytest.raises(RuntimeError) as exc_info:
+        client.get_issue("https://github.com/owner/repo/issues/5")
+        
+    assert sentinel_token not in str(exc_info.value), "Token leaked in exception message!"
+    assert sentinel_token not in repr(exc_info.value), "Token leaked in exception repr!"
+    assert sentinel_token not in str(exc_info.value.__cause__), "Token leaked in underlying cause!"

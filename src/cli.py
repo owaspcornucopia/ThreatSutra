@@ -53,12 +53,11 @@ def save_output(context, artifact: dict, relevance, decision: str) -> str:
     """Saves the reviewer's decision to outputs/ as a JSON file with an audit-safe timestamp, including relevance, source provenance, 
     and model/template version so the audit trail (decision, provenance, relevance, model/template version) survives after review.
     """
+    import uuid
     project_root = os.path.dirname(os.path.dirname(__file__))
     output_dir = os.path.join(project_root, "outputs")
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now(timezone.utc).isoformat()
-    filename = f"review_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')}.json"
-    output_path = os.path.join(output_dir, filename)
     output_data = {
         "timestamp": timestamp,
         "decision": decision,
@@ -80,8 +79,20 @@ def save_output(context, artifact: dict, relevance, decision: str) -> str:
             for p in context.provenance
         ],
     }
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(output_data, f, indent=4, ensure_ascii=False)
+    
+    while True:
+        time_str = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
+        unique_suffix = uuid.uuid4().hex[:8]
+        filename = f"review_{time_str}_{unique_suffix}.json"
+        output_path = os.path.join(output_dir, filename)
+        try:
+            fd = os.open(output_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(output_data, f, indent=4, ensure_ascii=False)
+            break
+        except FileExistsError:
+            continue
+
     print(f"\nOutput saved successfully to:\n{output_path}")
     return output_path
 
