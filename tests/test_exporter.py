@@ -1,5 +1,6 @@
 """Tests for GitHubIssueExporter"""
 import json
+import os
 import pytest
 import requests
 from src.adapters.GitHubIssueExporter import GitHubIssueExporter, MARKER_SCHEMA_VERSION
@@ -72,7 +73,14 @@ def test_already_exported_marker_short_circuits(tmp_path):
     exporter = make_exporter(tmp_path, dry_run=True)
     key = exporter._idempotency_key(REVIEW_RECORD)
     marker_path = exporter._marker_path(key)
-    marker_path.write_text('{"github_issue_url": "https://github.com/owaspcornucopia/ThreatSutra/issues/999"}')
+    # A valid completed marker must include all required fields to pass validation
+    completed_marker = json.dumps({
+        "idempotency_key": key,
+        "github_issue_number": 999,
+        "github_issue_url": "https://github.com/owaspcornucopia/ThreatSutra/issues/999",
+        "schema_version": MARKER_SCHEMA_VERSION,
+    })
+    marker_path.write_text(completed_marker)
     result = exporter.export(REVIEW_RECORD)
     assert result["status"] == "already_exported"
 
@@ -363,7 +371,11 @@ def test_search_success_zero_results_deletes_stale_marker(tmp_path, monkeypatch)
 
     result = exporter._reconcile_with_github(marker_path, key, REVIEW_RECORD)
     assert result is None
-    assert not marker_path.exists()
+    # After atomic re-acquisition, marker exists with fresh pending status
+    assert marker_path.exists()
+    fresh = json.loads(marker_path.read_text())
+    assert fresh["status"] == "pending"
+    assert fresh["schema_version"] == MARKER_SCHEMA_VERSION
 
 def test_search_success_with_hit_reconciles(tmp_path, monkeypatch):
     """ search succeeds and finds issue → write completed marker."""
@@ -507,3 +519,85 @@ def test_search_github_for_marker_bad_shapes(tmp_path, monkeypatch, mock_respons
 
     result = exporter._search_github_for_marker("key123")
     assert result is None
+
+def test_concurrent_race_in_reconcile_returns_error_recoverable(tmp_path, monkeypatch):
+    """Issue #26: If two processes both reconcile and one wins the os.replace
+    atomic rename, the loser must get error_recoverable, not proceed to POST."""
+    monkeypatch.setenv("GITHUB_API", "fake-token")
+    exporter = make_exporter(tmp_path, dry_run=False)
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    marker_path = exporter._marker_path(key)
+    marker_path.write_text('{"status": "pending"}')
+
+    class MockSession:
+        def get(self, *args, **kwargs):
+            class MockResponse:
+                def raise_for_status(self): pass
+                def json(self): return {"total_count": 0}
+            return MockResponse()
+        def mount(self, *args, **kwargs): pass
+    exporter.session = MockSession()
+
+    # Simulate the race: another process already moved (os.replace) the marker
+    def racing_replace(src, dst):
+        raise FileNotFoundError("Another process already moved the marker")
+
+    monkeypatch.setattr(os, "replace", racing_replace)
+
+    result = exporter._reconcile_with_github(marker_path, key, REVIEW_RECORD)
+    assert result["status"] == "error_recoverable"
+    assert result["reason"] == "concurrent_race"
+
+def test_concurrent_race_after_replace_succeeds_but_excl_fails(tmp_path, monkeypatch):
+    """Defensive coverage: os.replace succeeds but O_EXCL fails (another process
+    snuck in between replace and O_EXCL). Should still abort safely."""
+    monkeypatch.setenv("GITHUB_API", "fake-token")
+    exporter = make_exporter(tmp_path, dry_run=False)
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    marker_path = exporter._marker_path(key)
+    marker_path.write_text('{"status": "pending"}')
+
+    class MockSession:
+        def get(self, *args, **kwargs):
+            class MockResponse:
+                def raise_for_status(self): pass
+                def json(self): return {"total_count": 0}
+            return MockResponse()
+        def mount(self, *args, **kwargs): pass
+    exporter.session = MockSession()
+
+    # Let os.replace succeed, but make O_EXCL fail (another process created file)
+    original_open = os.open
+    def racing_open(path, flags, *args, **kwargs):
+        if flags & os.O_EXCL:
+            raise FileExistsError("Another process created the file first")
+        return original_open(path, flags, *args, **kwargs)
+    monkeypatch.setattr(os, "open", racing_open)
+
+    result = exporter._reconcile_with_github(marker_path, key, REVIEW_RECORD)
+    assert result["status"] == "error_recoverable"
+    assert result["reason"] == "concurrent_race"
+
+@pytest.mark.parametrize("incomplete_marker", [
+    {},  # Empty dict
+    {"status": "completed"},  # Missing all required fields
+    {"github_issue_url": "http://gh/1"},  # Missing number, key, schema
+    {"github_issue_number": 1, "github_issue_url": "http://gh/1"},  # Missing key, schema
+    # Type validation — these have all keys but wrong types/values:
+    {"github_issue_number": "1", "github_issue_url": "http://gh/1",
+     "schema_version": "2", "idempotency_key": "k"},  # number is str not int
+    {"github_issue_number": 1, "github_issue_url": "",
+     "schema_version": "2", "idempotency_key": "k"},  # empty URL
+    {"github_issue_number": 1, "github_issue_url": "http://gh/1",
+     "schema_version": "999", "idempotency_key": "k"},  # wrong schema version
+])
+def test_incomplete_completed_marker_triggers_reconciliation(tmp_path, incomplete_marker):
+    """Issue #26: A completed marker with missing required fields or wrong types
+    must NOT be accepted as already_exported. It must trigger reconciliation."""
+    exporter = make_exporter(tmp_path, dry_run=True)
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    marker_path = exporter._marker_path(key)
+    marker_path.write_text(json.dumps(incomplete_marker))
+    # dry_run → reconciliation → search returns None → error_recoverable
+    result = exporter.export(REVIEW_RECORD)
+    assert result["status"] == "error_recoverable"

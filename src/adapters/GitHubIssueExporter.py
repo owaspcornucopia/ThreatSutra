@@ -165,8 +165,35 @@ class GitHubIssueExporter:
             marker_path.write_text(json.dumps(marker, indent=2))
             return {"status": "already_exported", "marker": marker}
 
-        # Search succeeded, no match — safe to delete and allow a controlled retry.
-        marker_path.unlink(missing_ok=True)
+        # Search succeeded, no match — atomically claim ownership of the stale
+        # marker by renaming it to a .lock file.  os.replace() is a single atomic
+        # syscall on both POSIX and Windows: only ONE process can succeed.  The
+        # loser gets FileNotFoundError (source already moved) and aborts.
+        lock_path = marker_path.with_suffix(".lock")
+        try:
+            os.replace(str(marker_path), str(lock_path))
+        except FileNotFoundError:
+            # Another process already claimed and moved the stale marker.
+            return {"status": "error_recoverable", "reason": "concurrent_race"}
+
+        # We exclusively own the stale marker (now at .lock).  Create a fresh
+        # pending marker with O_EXCL — belt-and-suspenders against any leftover.
+        pending_content = json.dumps({
+            "status": "pending",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "schema_version": MARKER_SCHEMA_VERSION,
+        })
+        try:
+            fd = os.open(marker_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w") as f:
+                f.write(pending_content)
+        except FileExistsError:
+            # Defensive: shouldn't happen since we just moved the file, but
+            # if it does another process somehow created a marker — abort safely.
+            lock_path.unlink(missing_ok=True)
+            return {"status": "error_recoverable", "reason": "concurrent_race"}
+        # Clean up the lock file — it served its purpose as an atomic gate.
+        lock_path.unlink(missing_ok=True)
         return None
 
     def _recover_pending_marker(self, marker_path: Path, key: str, review_record: dict) -> dict | None:
@@ -242,18 +269,33 @@ class GitHubIssueExporter:
                 recovered = self._recover_pending_marker(marker_path, key, review_record)
                 if recovered is not None:
                     return recovered
-                # Recovery says retry is safe — overwrite with fresh pending
-                with open(marker_path, "w") as f:
-                    f.write(pending_content)
+                # Recovery returned None → _reconcile_with_github already re-acquired
+                # the marker atomically with O_EXCL; proceed directly to POST.
             else:
                 if marker_data.get("status") == "pending":
                     recovered = self._recover_pending_marker(marker_path, key, review_record)
                     if recovered is not None:
                         return recovered
-                    with open(marker_path, "w") as f:
-                        f.write(pending_content)
+                    # Recovery returned None → marker already re-acquired atomically.
                 else:
-                    return {"status": "already_exported", "marker": marker_data}
+                    # Validate completed marker before accepting — a corrupt marker
+                    # like {} or one missing required fields must NOT short-circuit
+                    # as "already_exported" with no issue URL.  Also validate types
+                    # and schema version to reject adversarial or incompatible data.
+                    is_valid = (
+                        isinstance(marker_data.get("github_issue_number"), int)
+                        and isinstance(marker_data.get("github_issue_url"), str)
+                        and marker_data["github_issue_url"]  # non-empty
+                        and marker_data.get("schema_version") == MARKER_SCHEMA_VERSION
+                        and marker_data.get("idempotency_key") is not None
+                    )
+                    if is_valid:
+                        return {"status": "already_exported", "marker": marker_data}
+                    # Incomplete completed marker — reconcile with GitHub.
+                    recovered = self._reconcile_with_github(marker_path, key, review_record)
+                    if recovered is not None:
+                        return recovered
+                    # Atomically re-acquired inside reconcile; proceed to POST.
 
         title, body = self._build_title_and_body(artifact, key)
         if self.dry_run:
@@ -288,5 +330,4 @@ class GitHubIssueExporter:
             "schema_version": MARKER_SCHEMA_VERSION,
         }
         marker_path.write_text(json.dumps(marker, indent=2))
-        return {"status": "created", "marker": marker}
-    
+        return {"status": "created", "marker": marker} 
