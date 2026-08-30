@@ -260,7 +260,7 @@ MALFORMED_EVIL_USER_STORIES = [
     "Missing the required format entirely.",
     "As a hacker, I want to hack",  # missing "so that" and period
     "As a , I want to , so that .",  # empty placeholders
-    "as an attacker, i want to hack, so that i win.",  # lowercase "as" still matches regex
+    "as an attacker, i want to hack, so that i win.",  # lowercase "as" is rejected by the case-sensitive regex
     "As an attacker, I want to hack, so that I win",  # missing trailing period
     "As an attacker,\nI want to hack,\nso that I win.",  # multi-line
 ]
