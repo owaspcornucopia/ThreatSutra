@@ -290,7 +290,7 @@ class GitHubIssueExporter:
                         and isinstance(marker_data.get("github_issue_url"), str)
                         and marker_data["github_issue_url"]  # non-empty
                         and marker_data.get("schema_version") == MARKER_SCHEMA_VERSION
-                        and marker_data.get("idempotency_key") is not None
+                        and marker_data.get("idempotency_key") == key
                     )
                     if is_valid:
                         return {"status": "already_exported", "marker": marker_data}
