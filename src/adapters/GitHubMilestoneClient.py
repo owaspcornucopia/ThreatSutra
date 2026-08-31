@@ -47,7 +47,7 @@ class GitHubMilestoneClient:
                 page = response.json()
             except requests.RequestException as exc:
                 safe_msg = str(exc).replace(self.token, "***") if self.token else str(exc)
-                raise RuntimeError(f"Could not fetch GitHub milestones for '{self.repo}': {safe_msg}")
+                raise RuntimeError(f"Could not fetch GitHub milestones for '{self.repo}': {safe_msg}") from None
             except ValueError as exc:
                 raise RuntimeError(f"GitHub milestones response for '{self.repo}' was not valid JSON.") from exc
             if not isinstance(page, list):
