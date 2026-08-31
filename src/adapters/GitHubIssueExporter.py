@@ -107,8 +107,10 @@ class GitHubIssueExporter:
             if not isinstance(data, dict):
                 return None  # Invalid response format, treat as unknown
 
-            total_count = data.get("total_count", 0)
-            if not isinstance(total_count, int) or total_count <= 0:
+            total_count = data.get("total_count")
+            if not isinstance(total_count, int) or isinstance(total_count, bool) or total_count < 0:
+                return None
+            if total_count == 0:
                 return {"found": False}
 
             items = data.get("items", [])
