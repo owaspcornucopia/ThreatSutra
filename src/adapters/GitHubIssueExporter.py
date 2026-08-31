@@ -319,7 +319,7 @@ class GitHubIssueExporter:
             # Preserve the pending marker: the POST may have succeeded despite the
             # client-side error.  A future run will reconcile via _search_github_for_marker.
             safe_msg = str(exc).replace(self.token, "***") if self.token else str(exc)
-            raise RuntimeError(f"Could not create GitHub issue for export: {safe_msg}")
+            raise RuntimeError(f"Could not create GitHub issue for export: {safe_msg}") from None
         marker = {
             "idempotency_key": key,
             "artifact_type": artifact["artifact_type"],
