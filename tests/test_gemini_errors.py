@@ -1,13 +1,10 @@
 """Tests for Gemini API error handling, debug logging, and --debug CLI option."""
 import logging
 from unittest.mock import MagicMock, patch
-
 import pytest
 from google.genai import errors as genai_errors
-
 from src.orchestrator import GeminiServiceError, call_ai_model, generate_verification_test
 from src.validation import ValidationError
-
 
 # Gemini HTTP error handling
 @patch("src.orchestrator.genai.Client")

@@ -9,7 +9,6 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
-
 from src.adapters.GitHubIssueClient import GitHubIssueClient
 from src.adapters.GitHubIssueExporter import GitHubIssueExporter
 from src.orchestrator import (
@@ -22,7 +21,6 @@ from src.orchestrator import (
 )
 from src.relevance import assess_relevance
 from src.validation import ValidationError, neutralize_for_display, validate_evil_user_story, validate_verification_test
-
 
 def print_header(text: str) -> None:
     print("\n" + "=" * 60)
@@ -55,12 +53,11 @@ def save_output(context, artifact: dict, relevance, decision: str) -> str:
     """Saves the reviewer's decision to outputs/ as a JSON file with an audit-safe timestamp, including relevance, source provenance, 
     and model/template version so the audit trail (decision, provenance, relevance, model/template version) survives after review.
     """
+    import uuid
     project_root = os.path.dirname(os.path.dirname(__file__))
     output_dir = os.path.join(project_root, "outputs")
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now(timezone.utc).isoformat()
-    filename = f"review_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
-    output_path = os.path.join(output_dir, filename)
     output_data = {
         "timestamp": timestamp,
         "decision": decision,
@@ -82,8 +79,20 @@ def save_output(context, artifact: dict, relevance, decision: str) -> str:
             for p in context.provenance
         ],
     }
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(output_data, f, indent=4, ensure_ascii=False)
+    
+    while True:
+        time_str = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
+        unique_suffix = uuid.uuid4().hex[:8]
+        filename = f"review_{time_str}_{unique_suffix}.json"
+        output_path = os.path.join(output_dir, filename)
+        try:
+            fd = os.open(output_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(output_data, f, indent=4, ensure_ascii=False)
+            break
+        except FileExistsError:
+            continue
+
     print(f"\nOutput saved successfully to:\n{output_path}")
     return output_path
 
@@ -121,6 +130,9 @@ def review_artifact(context, artifact: dict, relevance, exporter: GitHubIssueExp
         print(f"\n[DRY RUN] Would create GitHub issue:\nTitle: {result['title']}")
     elif result["status"] == "already_exported":
         print(f"\nAlready exported as {result['marker'].get('github_issue_url')}")
+    elif result["status"] == "error_recoverable":
+        print(f"\n[RETRY] Export could not be completed: {result.get('reason', 'unknown')}. "
+              f"The pending marker has been preserved — re-run to retry.")
     else:
         print(f"\nExported as {result['marker'].get('github_issue_url')}")
 
@@ -139,7 +151,7 @@ def main():
     except GeminiServiceError as exc:
         print(f"\nError: {exc}", file=sys.stderr)
         sys.exit(1)
-    issue_client = GitHubIssueClient()
+    issue_client = GitHubIssueClient(allowed_repos=[GITHUB_REPO])
     exporter = GitHubIssueExporter(repo=GITHUB_REPO)
     if exporter.dry_run:
         print("\n[DRY RUN] GITHUB_API is not set - approved artifacts will be shown, not exported.")
