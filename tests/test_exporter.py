@@ -651,7 +651,7 @@ def test_interleaved_recovery_thread_safety(tmp_path):
         barrier.wait()
         try:
             results[idx] = exp.export(REVIEW_RECORD)
-        except Exception as exc:
+        except (RuntimeError, ValidationError, requests.RequestException) as exc:
             results[idx] = {"status": "error", "reason": str(exc)}
 
     t1 = threading.Thread(target=worker, args=(0,))
