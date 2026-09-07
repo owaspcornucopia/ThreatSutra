@@ -60,6 +60,19 @@ class GitHubIssueExporter:
         self.session.mount("https://", HTTPAdapter(max_retries=retry))
 
     def _idempotency_key(self, review_record: dict) -> str:
+        """Computes a stable export identity for one artifact.
+
+        Revision policy (intentional product decision):
+        The key is derived from (artifact_type, source_threat_id, source_card_id,
+        source_milestone_number, MARKER_SCHEMA_VERSION).  Generated text, model
+        name, and prompt-template version are deliberately excluded so that a
+        later run can recover an interrupted export even when model output
+        differs.  This also means a *revised* approved artefact for the same
+        threat/card/milestone will resolve to the same key and short-circuit
+        against the existing marker.  If revised content must produce a
+        separate GitHub issue, the data model needs an additional revision
+        identifier in the key basis.
+        """
         basis = (
             f"{review_record['artifact_type']}:{review_record['source_threat_id']}:"
             f"{review_record['source_card_id']}:{review_record['source_milestone_number']}:"
@@ -69,6 +82,66 @@ class GitHubIssueExporter:
 
     def _marker_path(self, key: str) -> Path:
         return self.markers_dir / f"{key}.json"
+
+    def _lock_path(self, key: str) -> Path:
+        """Path for the per-key exclusive lock file."""
+        return self.markers_dir / f"{key}.lock"
+
+    def _acquire_key_lock(self, key: str) -> bool:
+        """Acquire a per-key exclusive lock via O_EXCL.
+        Returns True if the lock was acquired, False if another process
+        holds a fresh lock.  Stale locks (older than PENDING_TIMEOUT_SECONDS
+        or malformed) are broken before retrying.
+        """
+        lock_path = self._lock_path(key)
+        lock_content = json.dumps({"acquired_at": datetime.now(timezone.utc).isoformat()})
+
+        # Attempt 1: try to create the lock file exclusively.
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w") as f:
+                f.write(lock_content)
+            return True
+        except FileExistsError:
+            pass
+
+        # Lock file exists.  Check whether it is stale.
+        stale = False
+        try:
+            data = json.loads(lock_path.read_text())
+            if isinstance(data, dict):
+                acq_str = data.get("acquired_at", "")
+                acq = datetime.fromisoformat(str(acq_str))
+                if acq.tzinfo is None or (
+                    datetime.now(timezone.utc) - acq
+                ).total_seconds() > PENDING_TIMEOUT_SECONDS:
+                    stale = True
+            else:
+                stale = True
+        except (json.JSONDecodeError, OSError, ValueError, TypeError):
+            stale = True
+
+        if not stale:
+            return False  # Another process holds a fresh lock.
+
+        # Stale or malformed lock — break it and retry.
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass  # Another process already broke it.
+
+        # Attempt 2: retry after breaking.
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w") as f:
+                f.write(lock_content)
+            return True
+        except FileExistsError:
+            return False  # Another process beat us.
+
+    def _release_key_lock(self, key: str) -> None:
+        """Release the per-key lock.  Safe to call even when no lock is held."""
+        self._lock_path(key).unlink(missing_ok=True)
 
     def _build_title_and_body(self, artifact: dict, key: str) -> tuple:
         label = ARTIFACT_TITLES[artifact["artifact_type"]]
@@ -103,7 +176,10 @@ class GitHubIssueExporter:
         try:
             response = self.session.get(url, headers=headers, params=params, timeout=self.timeout)
             response.raise_for_status()
-            data = response.json()
+            try:
+                data = response.json()
+            except (ValueError, TypeError):
+                return None  # HTTP 200 but body is not valid JSON — unknown state
             if not isinstance(data, dict):
                 return None  # Invalid response format, treat as unknown
 
@@ -137,15 +213,28 @@ class GitHubIssueExporter:
             return None
 
     def _reconcile_with_github(self, marker_path: Path, key: str, review_record: dict) -> dict | None:
+        """Reconciles a stale, malformed, or unsupported-version pending marker with GitHub.
+
+        Acquires a per-key exclusive lock *before* the GitHub search so that only
+        one process can proceed through search → POST → completed-marker write.
+
+        Returns:
+          dict  – a terminal result (already_exported / error_recoverable); the
+                  lock has been released.
+          None  – search confirmed no remote issue exists; the stale marker has
+                  been overwritten with a fresh pending marker and **the lock
+                  remains held**.  The caller MUST call ``_release_key_lock(key)``
+                  after completing the POST and writing the completed marker.
         """
-        Reconciles a stale, malformed, or unsupported-version pending marker with GitHub.
-        Only deletes the marker after a successful search confirms no remote issue exists.
-        """
+        if not self._acquire_key_lock(key):
+            return {"status": "error_recoverable", "reason": "concurrent_lock"}
+
         search_result = self._search_github_for_marker(key)
 
         if search_result is None:
-            # Search failed — cannot determine remote state.  Preserve the marker so a
-            # future run can retry reconciliation instead of creating a duplicate issue.
+            # Search failed — cannot determine remote state.  Release the lock
+            # and preserve the marker so a future run can retry.
+            self._release_key_lock(key)
             return {"status": "error_recoverable", "reason": "search_failed"}
 
         if search_result.get("found"):
@@ -164,37 +253,18 @@ class GitHubIssueExporter:
                 "schema_version": MARKER_SCHEMA_VERSION,
             }
             marker_path.write_text(json.dumps(marker, indent=2))
+            self._release_key_lock(key)
             return {"status": "already_exported", "marker": marker}
 
-        # Search succeeded, no match — atomically claim ownership of the stale
-        # marker by renaming it to a .lock file.  os.replace() is a single atomic
-        # syscall on both POSIX and Windows: only ONE process can succeed.  The
-        # loser gets FileNotFoundError (source already moved) and aborts.
-        lock_path = marker_path.with_suffix(".lock")
-        try:
-            os.replace(str(marker_path), str(lock_path))
-        except FileNotFoundError:
-            # Another process already claimed and moved the stale marker.
-            return {"status": "error_recoverable", "reason": "concurrent_race"}
-
-        # We exclusively own the stale marker (now at .lock).  Create a fresh
-        # pending marker with O_EXCL — belt-and-suspenders against any leftover.
+        # Search succeeded, no match — overwrite the stale marker with a fresh
+        # pending marker.  The per-key lock remains held so the caller can POST
+        # and write the completed marker before any other process retries.
         pending_content = json.dumps({
             "status": "pending",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "schema_version": MARKER_SCHEMA_VERSION,
         })
-        try:
-            fd = os.open(marker_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            with os.fdopen(fd, "w") as f:
-                f.write(pending_content)
-        except FileExistsError:
-            # Defensive: shouldn't happen since we just moved the file, but
-            # if it does another process somehow created a marker — abort safely.
-            lock_path.unlink(missing_ok=True)
-            return {"status": "error_recoverable", "reason": "concurrent_race"}
-        # Clean up the lock file — it served its purpose as an atomic gate.
-        lock_path.unlink(missing_ok=True)
+        marker_path.write_text(pending_content)
         return None
 
     def _recover_pending_marker(self, marker_path: Path, key: str, review_record: dict) -> dict | None:
@@ -233,8 +303,11 @@ class GitHubIssueExporter:
         if timed_out:
             return self._reconcile_with_github(marker_path, key, review_record)
 
-        # Fresh marker, not timed out — treat as in-flight
-        return {"status": "already_exported", "marker": existing_marker}
+        # Fresh pending marker: another process may be in-flight, or the
+        # previous process crashed after marker creation but before POST.
+        # Returning "already_exported" would be a lie — no issue URL exists.
+        # Return error_recoverable so the caller knows to retry later.
+        return {"status": "error_recoverable", "reason": "export_in_flight"}
 
     def export(self, review_record: dict) -> dict:
         """
@@ -275,13 +348,13 @@ class GitHubIssueExporter:
                 if recovered is not None:
                     return recovered
                 # Recovery returned None → _reconcile_with_github already re-acquired
-                # the marker atomically with O_EXCL; proceed directly to POST.
+                # the marker atomically; lock is held. Proceed directly to POST.
             else:
                 if marker_data.get("status") == "pending":
                     recovered = self._recover_pending_marker(marker_path, key, review_record)
                     if recovered is not None:
                         return recovered
-                    # Recovery returned None → marker already re-acquired atomically.
+                    # Recovery returned None → marker already re-acquired; lock held.
                 else:
                     # Validate completed marker before accepting — a corrupt marker
                     # like {} or one missing required fields must NOT short-circuit
@@ -300,40 +373,66 @@ class GitHubIssueExporter:
                     recovered = self._reconcile_with_github(marker_path, key, review_record)
                     if recovered is not None:
                         return recovered
-                    # Atomically re-acquired inside reconcile; proceed to POST.
+                    # Atomically re-acquired inside reconcile; lock held.
 
-        title, body = self._build_title_and_body(artifact, key)
-        if self.dry_run:
-            marker_path.unlink()
-            return {"status": "dry_run", "title": title, "body": body}
-        if not self.token:
-            marker_path.unlink()
-            raise RuntimeError(
-                "GITHUB_API token is required for live export (see .env.example)."
-            )
-        url = f"https://api.github.com/repos/{self.repo}/issues"
-        headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {self.token}"}
+        # ---- From here a per-key lock MAY be held (from reconciliation). ----
+        # The finally block ensures it is always released on every exit path.
         try:
-            response = self.session.post(url, headers=headers, json={"title": title, "body": body}, timeout=self.timeout)
-            response.raise_for_status()
-            created = response.json()
-        except requests.RequestException as exc:
-            # Preserve the pending marker: the POST may have succeeded despite the
-            # client-side error.  A future run will reconcile via _search_github_for_marker.
-            safe_msg = str(exc).replace(self.token, "***") if self.token else str(exc)
-            raise RuntimeError(f"Could not create GitHub issue for export: {safe_msg}") from None
-        marker = {
-            "idempotency_key": key,
-            "artifact_type": artifact["artifact_type"],
-            "source_threat_id": artifact["source_threat_id"],
-            "source_card_id": artifact["source_card_id"],
-            "github_issue_number": created.get("number"),
-            "github_issue_url": created.get("html_url"),
-            "model": review_record.get("model"),
-            "prompt_template_version": review_record.get("prompt_template_version"),
-            "relevance": review_record.get("relevance"),
-            "provenance": review_record.get("provenance"),
-            "schema_version": MARKER_SCHEMA_VERSION,
-        }
-        marker_path.write_text(json.dumps(marker, indent=2))
-        return {"status": "created", "marker": marker} 
+            title, body = self._build_title_and_body(artifact, key)
+            if self.dry_run:
+                marker_path.unlink()
+                return {"status": "dry_run", "title": title, "body": body}
+            if not self.token:
+                marker_path.unlink()
+                raise RuntimeError(
+                    "GITHUB_API token is required for live export (see .env.example)."
+                )
+            url = f"https://api.github.com/repos/{self.repo}/issues"
+            headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {self.token}"}
+            try:
+                response = self.session.post(url, headers=headers, json={"title": title, "body": body}, timeout=self.timeout)
+                response.raise_for_status()
+            except requests.RequestException as exc:
+                # Preserve the pending marker: the POST may have succeeded despite the
+                # client-side error.  A future run will reconcile via _search_github_for_marker.
+                safe_msg = str(exc).replace(self.token, "***") if self.token else str(exc)
+                raise RuntimeError(f"Could not create GitHub issue for export: {safe_msg}") from None
+
+            # --- Validate the POST response before writing a completed marker ---
+            try:
+                created = response.json()
+            except (ValueError, TypeError):
+                # POST succeeded but response body is not valid JSON.
+                # Preserve the pending marker for future reconciliation.
+                return {"status": "error_recoverable", "reason": "invalid_post_response"}
+
+            if not isinstance(created, dict):
+                return {"status": "error_recoverable", "reason": "invalid_post_response"}
+
+            number = created.get("number")
+            html_url = created.get("html_url")
+            if (
+                not isinstance(number, int)
+                or isinstance(number, bool)
+                or not isinstance(html_url, str)
+                or not html_url
+            ):
+                return {"status": "error_recoverable", "reason": "invalid_post_response"}
+
+            marker = {
+                "idempotency_key": key,
+                "artifact_type": artifact["artifact_type"],
+                "source_threat_id": artifact["source_threat_id"],
+                "source_card_id": artifact["source_card_id"],
+                "github_issue_number": number,
+                "github_issue_url": html_url,
+                "model": review_record.get("model"),
+                "prompt_template_version": review_record.get("prompt_template_version"),
+                "relevance": review_record.get("relevance"),
+                "provenance": review_record.get("provenance"),
+                "schema_version": MARKER_SCHEMA_VERSION,
+            }
+            marker_path.write_text(json.dumps(marker, indent=2))
+            return {"status": "created", "marker": marker}
+        finally:
+            self._release_key_lock(key)

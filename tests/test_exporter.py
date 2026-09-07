@@ -108,14 +108,18 @@ def test_revised_template_version_produces_same_idempotency_key(tmp_path):
     assert exporter._idempotency_key(REVIEW_RECORD) == exporter._idempotency_key(other)
 
 def test_concurrent_reservation_prevents_duplicate_export(tmp_path):
+    """A fresh pending marker (< 5 min) means another process may be in-flight
+    or the previous process crashed before POST.  Must NOT return false
+    'already_exported' — must return error_recoverable so caller retries."""
     from datetime import datetime, timezone
     exporter = make_exporter(tmp_path, dry_run=True)
     key = exporter._idempotency_key(REVIEW_RECORD)
     marker_path = exporter._marker_path(key)
     # pre-create fresh pending reservation
-    marker_path.write_text(f'{{"status": "pending", "created_at": "{datetime.now(timezone.utc).isoformat()}"}}')
+    marker_path.write_text(f'{{"status": "pending", "created_at": "{datetime.now(timezone.utc).isoformat()}", "schema_version": "2"}}')
     result = exporter.export(REVIEW_RECORD)
-    assert result["status"] == "already_exported"
+    assert result["status"] == "error_recoverable"
+    assert result["reason"] == "export_in_flight"
 
 def test_stale_pending_marker_is_recovered(tmp_path, monkeypatch):
     from datetime import datetime, timezone, timedelta
@@ -383,11 +387,14 @@ def test_search_success_zero_results_deletes_stale_marker(tmp_path, monkeypatch)
 
     result = exporter._reconcile_with_github(marker_path, key, REVIEW_RECORD)
     assert result is None
-    # After atomic re-acquisition, marker exists with fresh pending status
+    # After re-acquisition, marker exists with fresh pending status
     assert marker_path.exists()
     fresh = json.loads(marker_path.read_text())
     assert fresh["status"] == "pending"
     assert fresh["schema_version"] == MARKER_SCHEMA_VERSION
+    # Per-key lock must be held (caller releases after POST)
+    assert exporter._lock_path(key).exists()
+    exporter._release_key_lock(key)
 
 def test_search_success_with_hit_reconciles(tmp_path, monkeypatch):
     """ search succeeds and finds issue → write completed marker."""
@@ -533,8 +540,9 @@ def test_search_github_for_marker_bad_shapes(tmp_path, monkeypatch, mock_respons
     assert result is None
 
 def test_concurrent_race_in_reconcile_returns_error_recoverable(tmp_path, monkeypatch):
-    """Issue #26: If two processes both reconcile and one wins the os.replace
-    atomic rename, the loser must get error_recoverable, not proceed to POST."""
+    """Issue #26: If two processes both reconcile and one holds the per-key lock,
+    the second must get error_recoverable, not proceed to POST."""
+    from datetime import datetime, timezone
     monkeypatch.setenv("GITHUB_API", "fake-token")
     exporter = make_exporter(tmp_path, dry_run=False)
     key = exporter._idempotency_key(REVIEW_RECORD)
@@ -550,24 +558,27 @@ def test_concurrent_race_in_reconcile_returns_error_recoverable(tmp_path, monkey
         def mount(self, *args, **kwargs): pass
     exporter.session = MockSession()
 
-    # Simulate the race: another process already moved (os.replace) the marker
-    def racing_replace(src, dst):
-        raise FileNotFoundError("Another process already moved the marker")
-
-    monkeypatch.setattr(os, "replace", racing_replace)
+    # Simulate: another process already holds the per-key lock (fresh)
+    lock_path = exporter._lock_path(key)
+    lock_path.write_text(json.dumps({"acquired_at": datetime.now(timezone.utc).isoformat()}))
 
     result = exporter._reconcile_with_github(marker_path, key, REVIEW_RECORD)
     assert result["status"] == "error_recoverable"
-    assert result["reason"] == "concurrent_race"
+    assert result["reason"] == "concurrent_lock"
+    # Clean up
+    lock_path.unlink(missing_ok=True)
 
-def test_concurrent_race_after_replace_succeeds_but_excl_fails(tmp_path, monkeypatch):
-    """Defensive coverage: os.replace succeeds but O_EXCL fails (another process
-    snuck in between replace and O_EXCL). Should still abort safely."""
+def test_concurrent_lock_sequential_interleave(tmp_path, monkeypatch):
+    """Issue #26: Two sequential calls to _reconcile_with_github on the same
+    stale marker — the first wins the lock and returns None (proceed to POST),
+    the second gets error_recoverable because the lock is held."""
+    from datetime import datetime, timezone, timedelta
     monkeypatch.setenv("GITHUB_API", "fake-token")
     exporter = make_exporter(tmp_path, dry_run=False)
     key = exporter._idempotency_key(REVIEW_RECORD)
     marker_path = exporter._marker_path(key)
-    marker_path.write_text('{"status": "pending"}')
+    stale_time = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+    marker_path.write_text(f'{{"status": "pending", "created_at": "{stale_time}"}}')
 
     class MockSession:
         def get(self, *args, **kwargs):
@@ -578,17 +589,82 @@ def test_concurrent_race_after_replace_succeeds_but_excl_fails(tmp_path, monkeyp
         def mount(self, *args, **kwargs): pass
     exporter.session = MockSession()
 
-    # Let os.replace succeed, but make O_EXCL fail (another process created file)
-    original_open = os.open
-    def racing_open(path, flags, *args, **kwargs):
-        if flags & os.O_EXCL:
-            raise FileExistsError("Another process created the file first")
-        return original_open(path, flags, *args, **kwargs)
-    monkeypatch.setattr(os, "open", racing_open)
+    # Process A: acquires lock, returns None (proceed to POST)
+    result_a = exporter._reconcile_with_github(marker_path, key, REVIEW_RECORD)
+    assert result_a is None
+    assert exporter._lock_path(key).exists()
 
-    result = exporter._reconcile_with_github(marker_path, key, REVIEW_RECORD)
-    assert result["status"] == "error_recoverable"
-    assert result["reason"] == "concurrent_race"
+    # Process B: lock is held, cannot proceed
+    result_b = exporter._reconcile_with_github(marker_path, key, REVIEW_RECORD)
+    assert result_b is not None
+    assert result_b["status"] == "error_recoverable"
+    assert result_b["reason"] == "concurrent_lock"
+
+    # Clean up
+    exporter._release_key_lock(key)
+
+def test_interleaved_recovery_thread_safety(tmp_path):
+    """Issue #26: Thread-level test — two threads both try to recover the same
+    stale marker.  Only one must proceed to POST; the other must abort.
+    This directly tests the scenario where both processes have completed the
+    search before any lock is acquired."""
+    import threading
+    from datetime import datetime, timezone, timedelta
+
+    post_count = [0]
+    post_lock = threading.Lock()
+    results = [None, None]
+    barrier = threading.Barrier(2)
+
+    stale_time = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+    # Pre-create stale marker
+    setup = GitHubIssueExporter(
+        repo="owaspcornucopia/ThreatSutra", token="fake-token",
+        dry_run=False, markers_dir=str(tmp_path),
+    )
+    key = setup._idempotency_key(REVIEW_RECORD)
+    marker_path = setup._marker_path(key)
+    marker_path.write_text(f'{{"status": "pending", "created_at": "{stale_time}"}}')
+
+    class CountingSession:
+        def get(self, *args, **kwargs):
+            class R:
+                def raise_for_status(self): pass
+                def json(self): return {"total_count": 0}
+            return R()
+        def post(self, *args, **kwargs):
+            with post_lock:
+                post_count[0] += 1
+            class R:
+                def raise_for_status(self): pass
+                def json(self): return {"number": 42, "html_url": "http://gh/42"}
+                status_code = 201
+            return R()
+        def mount(self, *args, **kwargs): pass
+
+    def worker(idx):
+        exp = GitHubIssueExporter(
+            repo="owaspcornucopia/ThreatSutra", token="fake-token",
+            dry_run=False, markers_dir=str(tmp_path),
+            session=CountingSession(),
+        )
+        barrier.wait()
+        try:
+            results[idx] = exp.export(REVIEW_RECORD)
+        except Exception as exc:
+            results[idx] = {"status": "error", "reason": str(exc)}
+
+    t1 = threading.Thread(target=worker, args=(0,))
+    t2 = threading.Thread(target=worker, args=(1,))
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    statuses = [r["status"] for r in results]
+    # At most one POST must have been made
+    assert post_count[0] <= 1, f"Expected at most 1 POST, got {post_count[0]}"
+    assert statuses.count("created") <= 1
 
 @pytest.mark.parametrize("incomplete_marker", [
     {},  # Empty dict
@@ -613,3 +689,46 @@ def test_incomplete_completed_marker_triggers_reconciliation(tmp_path, incomplet
     # dry_run → reconciliation → search returns None → error_recoverable
     result = exporter.export(REVIEW_RECORD)
     assert result["status"] == "error_recoverable"
+
+def test_search_github_invalid_json_body_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_API", "fake-token")
+    exporter = make_exporter(tmp_path, dry_run=False)
+
+    class MockSession:
+        def get(self, *args, **kwargs):
+            class MockResponse:
+                def raise_for_status(self): pass
+                def json(self): raise ValueError("Invalid JSON")
+            return MockResponse()
+        def mount(self, *args, **kwargs): pass
+    exporter.session = MockSession()
+
+    result = exporter._search_github_for_marker("key123")
+    assert result is None
+
+def test_post_invalid_json_response_preserves_marker(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_API", "fake-token")
+    exporter = make_exporter(tmp_path, dry_run=False)
+
+    class MockSession:
+        def post(self, *args, **kwargs):
+            class MockResponse:
+                def raise_for_status(self): pass
+                def json(self): raise ValueError("Invalid JSON")
+                status_code = 201
+            return MockResponse()
+        def mount(self, *args, **kwargs): pass
+    exporter.session = MockSession()
+
+    result = exporter.export(REVIEW_RECORD)
+    assert result["status"] == "error_recoverable"
+    assert result["reason"] == "invalid_post_response"
+
+def test_idempotency_key_revision_policy(tmp_path):
+    exporter = make_exporter(tmp_path, dry_run=True)
+    record1 = {**REVIEW_RECORD, "text": "A", "model": "gemini-1.5", "prompt_template_version": "v1"}
+    record2 = {**REVIEW_RECORD, "text": "B", "model": "gemini-1.5-pro", "prompt_template_version": "v2"}
+    assert exporter._idempotency_key(record1) == exporter._idempotency_key(record2)
+
+    record3 = {**REVIEW_RECORD, "source_threat_id": "different"}
+    assert exporter._idempotency_key(record1) != exporter._idempotency_key(record3)
