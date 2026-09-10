@@ -98,7 +98,7 @@ class GitHubIssueExporter:
 
         # Attempt 1: try to create the lock file exclusively.
         try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             with os.fdopen(fd, "w") as f:
                 f.write(lock_content)
             return True
@@ -132,7 +132,7 @@ class GitHubIssueExporter:
 
         # Attempt 2: retry after breaking.
         try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             with os.fdopen(fd, "w") as f:
                 f.write(lock_content)
             return True
@@ -264,7 +264,11 @@ class GitHubIssueExporter:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "schema_version": MARKER_SCHEMA_VERSION,
         })
-        marker_path.write_text(pending_content)
+        try:
+            marker_path.write_text(pending_content)
+        except OSError:
+            self._release_key_lock(key)
+            return {"status": "error_recoverable", "reason": "io_error"}
         return None
 
     def _recover_pending_marker(self, marker_path: Path, key: str, review_record: dict) -> dict | None:
@@ -327,6 +331,8 @@ class GitHubIssueExporter:
         key = self._idempotency_key(review_record)
         marker_path = self._marker_path(key)
 
+        holds_lock = False
+
         pending_content = json.dumps({
             "status": "pending",
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -349,12 +355,14 @@ class GitHubIssueExporter:
                     return recovered
                 # Recovery returned None → _reconcile_with_github already re-acquired
                 # the marker atomically; lock is held. Proceed directly to POST.
+                holds_lock = True
             else:
                 if marker_data.get("status") == "pending":
                     recovered = self._recover_pending_marker(marker_path, key, review_record)
                     if recovered is not None:
                         return recovered
                     # Recovery returned None → marker already re-acquired; lock held.
+                    holds_lock = True
                 else:
                     # Validate completed marker before accepting — a corrupt marker
                     # like {} or one missing required fields must NOT short-circuit
@@ -374,6 +382,7 @@ class GitHubIssueExporter:
                     if recovered is not None:
                         return recovered
                     # Atomically re-acquired inside reconcile; lock held.
+                    holds_lock = True
 
         # ---- From here a per-key lock MAY be held (from reconciliation). ----
         # The finally block ensures it is always released on every exit path.
@@ -435,4 +444,5 @@ class GitHubIssueExporter:
             marker_path.write_text(json.dumps(marker, indent=2))
             return {"status": "created", "marker": marker}
         finally:
-            self._release_key_lock(key)
+            if holds_lock:
+                self._release_key_lock(key)

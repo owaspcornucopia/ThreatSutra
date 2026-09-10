@@ -1,6 +1,5 @@
 """Tests for GitHubIssueExporter"""
 import json
-import os
 import pytest
 import requests
 from src.adapters.GitHubIssueExporter import GitHubIssueExporter, MARKER_SCHEMA_VERSION
