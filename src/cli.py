@@ -53,6 +53,10 @@ def save_output(context, artifact: dict, relevance, decision: str) -> str:
     """Saves the reviewer's decision to outputs/ as a JSON file with an audit-safe timestamp, including relevance, source provenance, 
     and model/template version so the audit trail (decision, provenance, relevance, model/template version) survives after review.
     """
+    from src.validation import validate_export_artifact
+    validate_export_artifact(artifact)
+    if decision not in ("approve", "reject"):
+        raise ValueError(f"save_output: decision must be 'approve' or 'reject', got '{decision}'.")
     import uuid
     project_root = os.path.dirname(os.path.dirname(__file__))
     output_dir = os.path.join(project_root, "outputs")

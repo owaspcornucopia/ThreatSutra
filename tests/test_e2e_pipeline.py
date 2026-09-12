@@ -107,29 +107,19 @@ def test_e2e_approved_artifact_exported_with_persisted_representation(tmp_path, 
         "model": "gemini-test",
         "prompt_template_version": "1.0",
     }
-    # Step 7–8: Simulate review (approve) and persist to disk
-    review_record = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "decision": "approve",
-        **artifact,
-        "relevance": {
-            "score": 8,
-            "color": "green",
-            "explanation": "Relevant",
-            "assessed_issue_urls": [],
-        },
-        "provenance": [
-            {
-                "source_type": p.source_type,
-                "location": p.location,
-                "content_hash": p.content_hash,
-                "version": p.version,
-            }
-            for p in context.provenance
-        ],
-    }
-    review_path = tmp_path / "review_e2e.json"
-    review_path.write_text(json.dumps(review_record, indent=2))
+    # Step 7–8: Simulate review (approve) and persist via real save_output()
+    from src.cli import save_output
+    from src.relevance import RelevanceAssessment
+    import src.cli
+    # Redirect save_output's project root to tmp_path
+    src_dir = tmp_path / "src"
+    src_dir.mkdir(exist_ok=True)
+    fake_cli_py = src_dir / "cli.py"
+    monkeypatch.setattr(src.cli, "__file__", str(fake_cli_py))
+    relevance = RelevanceAssessment(
+        score=8, color="green", explanation="Relevant", assessed_issue_urls=()
+    )
+    review_path = save_output(context, artifact, relevance, "approve")
     # Step 9: Re-read from disk (as the real CLI does)
     with open(review_path, "r", encoding="utf-8") as f:
         persisted_record = json.load(f)
@@ -269,3 +259,33 @@ def test_e2e_duplicate_export_returns_already_exported(tmp_path, monkeypatch):
     assert result2["status"] == "already_exported"
     # POST should only have been called once
     mock_session.post.assert_called_once()
+
+def test_e2e_malformed_artifact_rejected_by_save_output(tmp_path, monkeypatch):
+    """Issue #13: Invalid artifacts must NOT create ANY file (not even partially).
+    Validation fires before any file I/O, so the output directory must remain empty."""
+    from src.cli import save_output
+    import src.cli
+    
+    # Mock project root to point to tmp_path
+    src_dir = tmp_path / "src"
+    src_dir.mkdir(exist_ok=True)
+    fake_cli_py = src_dir / "cli.py"
+    monkeypatch.setattr(src.cli, "__file__", str(fake_cli_py))
+    
+    context = MagicMock()
+    context.threat_id = "t1"
+    
+    malformed_artifact = {
+        "artifact_type": "evil_user_story",
+        "text": "test",
+        # "source_threat_id": "T1",  # Missing!
+        "source_card_id": "C1",
+        "source_milestone_number": 1,
+    }
+    
+    with pytest.raises(ValidationError):
+        save_output(context, malformed_artifact, None, "approve")
+
+    # Prove: no output file was created (not even partially)
+    output_dir = tmp_path / "outputs"
+    assert not output_dir.exists() or list(output_dir.iterdir()) == []
