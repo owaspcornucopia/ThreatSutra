@@ -662,8 +662,9 @@ def test_interleaved_recovery_thread_safety(tmp_path):
 
     statuses = [r["status"] for r in results]
     # At most one POST must have been made
-    assert post_count[0] <= 1, f"Expected at most 1 POST, got {post_count[0]}"
-    assert statuses.count("created") <= 1
+    assert post_count[0] == 1, f"Expected exactly 1 POST, got {post_count[0]}"
+    assert statuses.count("created") == 1
+    assert statuses.count("already_exported") + statuses.count("error_recoverable") == 1
 
 @pytest.mark.parametrize("incomplete_marker", [
     {},  # Empty dict
