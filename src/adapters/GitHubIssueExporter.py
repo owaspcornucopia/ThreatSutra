@@ -4,9 +4,12 @@ Without a write token, it automatically behaves as dry-run.
 """
 import hashlib
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+import portalocker
+import portalocker.exceptions
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -28,6 +31,69 @@ ARTIFACT_TITLES = {
     "evil_user_story": "Evil user story",
     "verification_test": "Verification test",
 }
+
+
+class ExportLock:
+    """Cross-platform per-key file lock using portalocker.
+
+    Ownership is the open file handle itself — never a flag or a timestamp.
+    The OS kernel releases the lock automatically if the process crashes.
+    Release only operates on the same handle that acquired the lock.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._file = None
+
+    def acquire(self) -> None:
+        """Acquire an exclusive, non-blocking OS lock.
+
+        Raises portalocker.exceptions.LockException if another process holds it.
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            self._file = os.fdopen(fd, "a+")
+            portalocker.lock(self._file, portalocker.LOCK_EX | portalocker.LOCK_NB)
+        except BaseException:
+            # If fdopen succeeded, close it (which also closes fd).
+            # If fdopen failed, close the raw fd directly.
+            if self._file is not None:
+                self._file.close()
+            else:
+                os.close(fd)
+            self._file = None
+            raise
+
+    def release(self) -> None:
+        """Release the OS lock and close the file handle.
+
+        Safe to call even if no lock is held (no-op).
+        """
+        if self._file is None:
+            return 
+        try:
+            try:
+                portalocker.unlock(self._file)
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger(__name__).warning("Failed to release lock at %s: %s", self.path, exc)
+        finally:
+            self._file.close()
+            self._file = None
+
+    @property
+    def held(self) -> bool:
+        """True if this instance currently holds the lock."""
+        return self._file is not None
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.release()
+        return False
+
 
 class GitHubIssueExporter:
     """
@@ -86,62 +152,6 @@ class GitHubIssueExporter:
     def _lock_path(self, key: str) -> Path:
         """Path for the per-key exclusive lock file."""
         return self.markers_dir / f"{key}.lock"
-
-    def _acquire_key_lock(self, key: str) -> bool:
-        """Acquire a per-key exclusive lock via O_EXCL.
-        Returns True if the lock was acquired, False if another process
-        holds a fresh lock.  Stale locks (older than PENDING_TIMEOUT_SECONDS
-        or malformed) are broken before retrying.
-        """
-        lock_path = self._lock_path(key)
-        lock_content = json.dumps({"acquired_at": datetime.now(timezone.utc).isoformat()})
-
-        # Attempt 1: try to create the lock file exclusively.
-        try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            with os.fdopen(fd, "w") as f:
-                f.write(lock_content)
-            return True
-        except FileExistsError:
-            pass
-
-        # Lock file exists.  Check whether it is stale.
-        stale = False
-        try:
-            data = json.loads(lock_path.read_text())
-            if isinstance(data, dict):
-                acq_str = data.get("acquired_at", "")
-                acq = datetime.fromisoformat(str(acq_str))
-                if acq.tzinfo is None or (
-                    datetime.now(timezone.utc) - acq
-                ).total_seconds() > PENDING_TIMEOUT_SECONDS:
-                    stale = True
-            else:
-                stale = True
-        except (json.JSONDecodeError, OSError, ValueError, TypeError):
-            stale = True
-
-        if not stale:
-            return False  # Another process holds a fresh lock.
-
-        # Stale or malformed lock — break it and retry.
-        try:
-            lock_path.unlink()
-        except FileNotFoundError:
-            pass  # Another process already broke it.
-
-        # Attempt 2: retry after breaking.
-        try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            with os.fdopen(fd, "w") as f:
-                f.write(lock_content)
-            return True
-        except FileExistsError:
-            return False  # Another process beat us.
-
-    def _release_key_lock(self, key: str) -> None:
-        """Release the per-key lock.  Safe to call even when no lock is held."""
-        self._lock_path(key).unlink(missing_ok=True)
 
     def _build_title_and_body(self, artifact: dict, key: str) -> tuple:
         label = ARTIFACT_TITLES[artifact["artifact_type"]]
@@ -215,26 +225,20 @@ class GitHubIssueExporter:
     def _reconcile_with_github(self, marker_path: Path, key: str, review_record: dict) -> dict | None:
         """Reconciles a stale, malformed, or unsupported-version pending marker with GitHub.
 
-        Acquires a per-key exclusive lock *before* the GitHub search so that only
-        one process can proceed through search → POST → completed-marker write.
+        IMPORTANT: The caller MUST already hold the ExportLock for this key.
+        This method does NOT acquire or release any lock.
 
         Returns:
-          dict  – a terminal result (already_exported / error_recoverable); the
-                  lock has been released.
+          dict  – a terminal result (already_exported / error_recoverable).
           None  – search confirmed no remote issue exists; the stale marker has
-                  been overwritten with a fresh pending marker and **the lock
-                  remains held**.  The caller MUST call ``_release_key_lock(key)``
-                  after completing the POST and writing the completed marker.
+                  been overwritten with a fresh pending marker.  The caller
+                  should proceed to POST.
         """
-        if not self._acquire_key_lock(key):
-            return {"status": "error_recoverable", "reason": "concurrent_lock"}
-
         search_result = self._search_github_for_marker(key)
 
         if search_result is None:
-            # Search failed — cannot determine remote state.  Release the lock
-            # and preserve the marker so a future run can retry.
-            self._release_key_lock(key)
+            # Search failed — cannot determine remote state.
+            # Preserve the marker so a future run can retry.
             return {"status": "error_recoverable", "reason": "search_failed"}
 
         if search_result.get("found"):
@@ -253,12 +257,10 @@ class GitHubIssueExporter:
                 "schema_version": MARKER_SCHEMA_VERSION,
             }
             marker_path.write_text(json.dumps(marker, indent=2))
-            self._release_key_lock(key)
             return {"status": "already_exported", "marker": marker}
 
         # Search succeeded, no match — overwrite the stale marker with a fresh
-        # pending marker.  The per-key lock remains held so the caller can POST
-        # and write the completed marker before any other process retries.
+        # pending marker so the caller can POST.
         pending_content = json.dumps({
             "status": "pending",
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -267,7 +269,6 @@ class GitHubIssueExporter:
         try:
             marker_path.write_text(pending_content)
         except OSError:
-            self._release_key_lock(key)
             return {"status": "error_recoverable", "reason": "io_error"}
         return None
 
@@ -276,6 +277,8 @@ class GitHubIssueExporter:
         Attempts to recover a pending marker that might be stuck due to an interrupted export.
         Distinguishes malformed markers, unsupported versions, fresh in-flight markers,
         and stale markers — and only deletes after successful remote reconciliation.
+
+        IMPORTANT: The caller MUST already hold the ExportLock for this key.
         """
         try:
             existing_marker = json.loads(marker_path.read_text())
@@ -331,68 +334,67 @@ class GitHubIssueExporter:
         key = self._idempotency_key(review_record)
         marker_path = self._marker_path(key)
 
-        holds_lock = False
-
-        pending_content = json.dumps({
-            "status": "pending",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "schema_version": MARKER_SCHEMA_VERSION,
-        })
+        # --- Acquire per-key OS lock for the ENTIRE export window ---
+        lock = ExportLock(self._lock_path(key))
+        try:
+            lock.acquire()
+        except portalocker.exceptions.LockException:
+            return {"status": "error_recoverable", "reason": "concurrent_lock"}
 
         try:
-            fd = os.open(marker_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            with os.fdopen(fd, "w") as f:
-                f.write(pending_content)
-        except FileExistsError:
-            try:
-                marker_data = json.loads(marker_path.read_text())
-                if not isinstance(marker_data, dict):
-                    raise ValueError("JSON is valid but not a dictionary")
-            except (json.JSONDecodeError, OSError, ValueError):
-                # Malformed, non-dict, or unreadable existing marker — attempt recovery
-                recovered = self._recover_pending_marker(marker_path, key, review_record)
-                if recovered is not None:
-                    return recovered
-                # Recovery returned None → _reconcile_with_github already re-acquired
-                # the marker atomically; lock is held. Proceed directly to POST.
-                holds_lock = True
-            else:
-                if marker_data.get("status") == "pending":
+            # Check if a marker already exists on disk.
+            if marker_path.exists():
+                try:
+                    marker_data = json.loads(marker_path.read_text())
+                    if not isinstance(marker_data, dict):
+                        raise ValueError("JSON is valid but not a dictionary")
+                except (json.JSONDecodeError, OSError, ValueError):
+                    # Malformed, non-dict, or unreadable existing marker — attempt recovery
                     recovered = self._recover_pending_marker(marker_path, key, review_record)
                     if recovered is not None:
                         return recovered
-                    # Recovery returned None → marker already re-acquired; lock held.
-                    holds_lock = True
+                    # Recovery returned None → proceed to POST
                 else:
-                    # Validate completed marker before accepting — a corrupt marker
-                    # like {} or one missing required fields must NOT short-circuit
-                    # as "already_exported" with no issue URL.  Also validate types
-                    # and schema version to reject adversarial or incompatible data.
-                    is_valid = (
-                        isinstance(marker_data.get("github_issue_number"), int)
-                        and isinstance(marker_data.get("github_issue_url"), str)
-                        and marker_data["github_issue_url"]  # non-empty
-                        and marker_data.get("schema_version") == MARKER_SCHEMA_VERSION
-                        and marker_data.get("idempotency_key") == key
-                    )
-                    if is_valid:
-                        return {"status": "already_exported", "marker": marker_data}
-                    # Incomplete completed marker — reconcile with GitHub.
-                    recovered = self._reconcile_with_github(marker_path, key, review_record)
-                    if recovered is not None:
-                        return recovered
-                    # Atomically re-acquired inside reconcile; lock held.
-                    holds_lock = True
+                    if marker_data.get("status") == "pending":
+                        recovered = self._recover_pending_marker(marker_path, key, review_record)
+                        if recovered is not None:
+                            return recovered
+                        # Recovery returned None → proceed to POST
+                    else:
+                        # Validate completed marker before accepting — a corrupt marker
+                        # like {} or one missing required fields must NOT short-circuit
+                        # as "already_exported" with no issue URL.  Also validate types
+                        # and schema version to reject adversarial or incompatible data.
+                        is_valid = (
+                            isinstance(marker_data.get("github_issue_number"), int)
+                            and isinstance(marker_data.get("github_issue_url"), str)
+                            and marker_data["github_issue_url"]  # non-empty
+                            and marker_data.get("schema_version") == MARKER_SCHEMA_VERSION
+                            and marker_data.get("idempotency_key") == key
+                        )
+                        if is_valid:
+                            return {"status": "already_exported", "marker": marker_data}
+                        # Incomplete completed marker — reconcile with GitHub.
+                        recovered = self._reconcile_with_github(marker_path, key, review_record)
+                        if recovered is not None:
+                            return recovered
+                        # Reconcile returned None → proceed to POST
+            else:
+                # No marker exists — write a fresh pending marker.
+                pending_content = json.dumps({
+                    "status": "pending",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "schema_version": MARKER_SCHEMA_VERSION,
+                })
+                marker_path.write_text(pending_content)
 
-        # ---- From here a per-key lock MAY be held (from reconciliation). ----
-        # The finally block ensures it is always released on every exit path.
-        try:
+            # --- POST the GitHub issue ---
             title, body = self._build_title_and_body(artifact, key)
             if self.dry_run:
-                marker_path.unlink()
+                marker_path.unlink(missing_ok=True)
                 return {"status": "dry_run", "title": title, "body": body}
             if not self.token:
-                marker_path.unlink()
+                marker_path.unlink(missing_ok=True)
                 raise RuntimeError(
                     "GITHUB_API token is required for live export (see .env.example)."
                 )
@@ -444,5 +446,4 @@ class GitHubIssueExporter:
             marker_path.write_text(json.dumps(marker, indent=2))
             return {"status": "created", "marker": marker}
         finally:
-            if holds_lock:
-                self._release_key_lock(key)
+            lock.release()
