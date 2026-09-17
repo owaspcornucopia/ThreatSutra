@@ -87,7 +87,7 @@ ThreatSutra/
 │   └── DFD_ThreatSutra.json    # Tracked Threat Dragon data flow diagram
 ├── outputs/                    # Persisted review records and export markers
 ├── .github/workflows/
-│   └── tests.yml               # CI pipeline (Python 3.10–3.12)
+│   └── tests.yml               # CI pipeline (Python 3.14)
 ├── requirements.txt
 ├── .env.example                # Environment variable template
 ├── CONTRIBUTING.md
@@ -99,7 +99,7 @@ ThreatSutra/
 
 ## Installation
 
-**Requirements:** Python 3.10+
+**Requirements:** Python 3.14+
 
 ```bash
 # Clone the repository
@@ -175,7 +175,7 @@ Review records are written to `outputs/` as timestamped JSON files. Export marke
 |--------|-------|
 | **Total tests** | **204 / 204 passing** |
 | **Coverage** | **100 %** (953 statements, 0 missed) |
-| **CI** | ![CI: passing](https://github.com/owaspcornucopia/ThreatSutra/actions/workflows/tests.yml/badge.svg) (Python 3.10, 3.11, 3.12) |
+| **CI** | ![CI: passing](https://github.com/owaspcornucopia/ThreatSutra/actions/workflows/tests.yml/badge.svg) (Python 3.14) |
 | **Coverage gate** | `--cov-fail-under=95` enforced in CI |
 | **Lint / Types** | `ruff` and `mypy` enforced in CI |
 
