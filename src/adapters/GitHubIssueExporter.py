@@ -75,7 +75,7 @@ class ExportLock:
         try:
             try:
                 portalocker.unlock(self._file)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logging.getLogger(__name__).warning("Failed to release lock at %s: %s", self.path, exc)
         finally:
             self._file.close()
