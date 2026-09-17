@@ -1,8 +1,9 @@
 """Tests for GitHubIssueExporter"""
 import json
+import sys
 import pytest
 import requests
-from src.adapters.GitHubIssueExporter import GitHubIssueExporter, MARKER_SCHEMA_VERSION
+from src.adapters.GitHubIssueExporter import GitHubIssueExporter, ExportLock, MARKER_SCHEMA_VERSION
 from src.validation import ValidationError
 
 ARTIFACT = {
@@ -33,7 +34,8 @@ def test_dry_run_does_not_create_a_marker(tmp_path):
     exporter = make_exporter(tmp_path, dry_run=True)
     result = exporter.export(REVIEW_RECORD)
     assert result["status"] == "dry_run"
-    assert list(tmp_path.iterdir()) == []
+    # No .json marker file should remain; .lock files are expected OS-lock artifacts
+    assert list(tmp_path.glob("*.json")) == []
 
 def test_dry_run_title_includes_traceability_footer_source(tmp_path):
     """Issue #13: the body must contain the traceability footer with source threat, card, and milestone."""
@@ -386,14 +388,11 @@ def test_search_success_zero_results_deletes_stale_marker(tmp_path, monkeypatch)
 
     result = exporter._reconcile_with_github(marker_path, key, REVIEW_RECORD)
     assert result is None
-    # After re-acquisition, marker exists with fresh pending status
+    # After reconciliation, marker exists with fresh pending status
     assert marker_path.exists()
     fresh = json.loads(marker_path.read_text())
     assert fresh["status"] == "pending"
     assert fresh["schema_version"] == MARKER_SCHEMA_VERSION
-    # Per-key lock must be held (caller releases after POST)
-    assert exporter._lock_path(key).exists()
-    exporter._release_key_lock(key)
 
 def test_search_success_with_hit_reconciles(tmp_path, monkeypatch):
     """ search succeeds and finds issue → write completed marker."""
@@ -539,9 +538,8 @@ def test_search_github_for_marker_bad_shapes(tmp_path, monkeypatch, mock_respons
     assert result is None
 
 def test_concurrent_race_in_reconcile_returns_error_recoverable(tmp_path, monkeypatch):
-    """Issue #26: If two processes both reconcile and one holds the per-key lock,
-    the second must get error_recoverable, not proceed to POST."""
-    from datetime import datetime, timezone
+    """Issue #56: If another process holds the ExportLock for this key,
+    export() must get error_recoverable/concurrent_lock immediately."""
     monkeypatch.setenv("GITHUB_API", "fake-token")
     exporter = make_exporter(tmp_path, dry_run=False)
     key = exporter._idempotency_key(REVIEW_RECORD)
@@ -557,56 +555,52 @@ def test_concurrent_race_in_reconcile_returns_error_recoverable(tmp_path, monkey
         def mount(self, *args, **kwargs): pass
     exporter.session = MockSession()
 
-    # Simulate: another process already holds the per-key lock (fresh)
-    lock_path = exporter._lock_path(key)
-    lock_path.write_text(json.dumps({"acquired_at": datetime.now(timezone.utc).isoformat()}))
-
-    result = exporter._reconcile_with_github(marker_path, key, REVIEW_RECORD)
-    assert result["status"] == "error_recoverable"
-    assert result["reason"] == "concurrent_lock"
-    # Clean up
-    lock_path.unlink(missing_ok=True)
+    # Simulate: another process already holds the OS lock
+    blocker = ExportLock(exporter._lock_path(key))
+    blocker.acquire()
+    try:
+        result = exporter.export(REVIEW_RECORD)
+        assert result["status"] == "error_recoverable"
+        assert result["reason"] == "concurrent_lock"
+    finally:
+        blocker.release()
 
 def test_concurrent_lock_sequential_interleave(tmp_path, monkeypatch):
-    """Issue #26: Two sequential calls to _reconcile_with_github on the same
-    stale marker — the first wins the lock and returns None (proceed to POST),
-    the second gets error_recoverable because the lock is held."""
-    from datetime import datetime, timezone, timedelta
+    """Issue #56: Two sequential calls — the first export() acquires the
+    ExportLock and proceeds; while the lock is held, the second export()
+    gets error_recoverable/concurrent_lock."""
     monkeypatch.setenv("GITHUB_API", "fake-token")
     exporter = make_exporter(tmp_path, dry_run=False)
     key = exporter._idempotency_key(REVIEW_RECORD)
-    marker_path = exporter._marker_path(key)
-    stale_time = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
-    marker_path.write_text(f'{{"status": "pending", "created_at": "{stale_time}"}}')
 
+    # Simulate: first process already holds the ExportLock
+    blocker = ExportLock(exporter._lock_path(key))
+    blocker.acquire()
+    try:
+        # Second process: lock is held, cannot proceed
+        result = exporter.export(REVIEW_RECORD)
+        assert result["status"] == "error_recoverable"
+        assert result["reason"] == "concurrent_lock"
+    finally:
+        blocker.release()
+
+    # After release, export should proceed (dry_run=False needs a mock session for POST)
     class MockSession:
-        def get(self, *args, **kwargs):
-            class MockResponse:
+        def post(self, *args, **kwargs):
+            class R:
                 def raise_for_status(self): pass
-                def json(self): return {"total_count": 0}
-            return MockResponse()
+                def json(self): return {"number": 42, "html_url": "http://gh/42"}
+                status_code = 201
+            return R()
         def mount(self, *args, **kwargs): pass
     exporter.session = MockSession()
-
-    # Process A: acquires lock, returns None (proceed to POST)
-    result_a = exporter._reconcile_with_github(marker_path, key, REVIEW_RECORD)
-    assert result_a is None
-    assert exporter._lock_path(key).exists()
-
-    # Process B: lock is held, cannot proceed
-    result_b = exporter._reconcile_with_github(marker_path, key, REVIEW_RECORD)
-    assert result_b is not None
-    assert result_b["status"] == "error_recoverable"
-    assert result_b["reason"] == "concurrent_lock"
-
-    # Clean up
-    exporter._release_key_lock(key)
+    result2 = exporter.export(REVIEW_RECORD)
+    assert result2["status"] == "created"
 
 def test_interleaved_recovery_thread_safety(tmp_path):
-    """Issue #26: Thread-level test — two threads both try to recover the same
-    stale marker.  Only one must proceed to POST; the other must abort.
-    This directly tests the scenario where both processes have completed the
-    search before any lock is acquired."""
+    """Issue #56: Thread-level test — two threads both try to export the same
+    artifact.  The ExportLock ensures only one acquires the OS lock and
+    proceeds to POST; the other must get concurrent_lock immediately."""
     import threading
     from datetime import datetime, timezone, timedelta
 
@@ -732,3 +726,171 @@ def test_idempotency_key_revision_policy(tmp_path):
 
     record3 = {**REVIEW_RECORD, "source_threat_id": "different"}
     assert exporter._idempotency_key(record1) != exporter._idempotency_key(record3)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits not enforced on Windows; ACL is the relevant mechanism")
+def test_export_lock_file_permissions(tmp_path):
+    """Issue #56: Lock file must be created with restrictive 0o600 permissions on POSIX."""
+    import stat
+    lock_path = tmp_path / "perm_test.lock"
+    lock = ExportLock(lock_path)
+    lock.acquire()
+    try:
+        mode = stat.S_IMODE(lock_path.stat().st_mode)
+        assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
+    finally:
+        lock.release()
+
+
+def test_export_lock_release_is_idempotent(tmp_path):
+    """Calling release() twice must not raise."""
+    lock = ExportLock(tmp_path / "idempotent.lock")
+    lock.acquire()
+    lock.release()
+    lock.release()  # must be a no-op
+
+
+def test_export_lock_context_manager(tmp_path):
+    """ExportLock as context manager must acquire on enter and release on exit."""
+    lock_path = tmp_path / "ctx.lock"
+    with ExportLock(lock_path) as lock:
+        assert lock.held
+    assert not lock.held
+
+
+def test_export_lock_contention(tmp_path):
+    """Two ExportLock instances on the same path — second must raise LockException."""
+    import portalocker.exceptions
+    lock_path = tmp_path / "contention.lock"
+    a = ExportLock(lock_path)
+    a.acquire()
+    try:
+        b = ExportLock(lock_path)
+        with pytest.raises(portalocker.exceptions.LockException):
+            b.acquire()
+    finally:
+        a.release()
+
+
+# ---- Cross-process regression test (Issue #56) ----
+# Top-level functions required for Windows multiprocessing spawn.
+
+def _mp_worker_block(lock_path_str, markers_dir, ready_flag_path, review_record):
+    """Process A: acquire lock, signal ready, then HARD CRASH."""
+    import os
+    import time
+    from src.adapters.GitHubIssueExporter import ExportLock
+    from pathlib import Path
+    lock = ExportLock(Path(lock_path_str))
+    lock.acquire()
+    # Signal that we hold the lock
+    Path(ready_flag_path).write_text("ready")
+    # Block until the main test acknowledges the flag
+    for _ in range(100):
+        if not Path(ready_flag_path).exists():
+            # Main test consumed the flag, simulate sudden process death
+            os._exit(1)
+        time.sleep(0.05)
+    # Failsafe if main test hangs
+    os._exit(1)
+
+
+def _mp_worker_export(markers_dir, review_record, result_path, post_count_path):
+    """Process B: attempt export() — should get concurrent_lock while A holds it."""
+    import json as _json
+    from pathlib import Path
+    from src.adapters.GitHubIssueExporter import GitHubIssueExporter
+
+    class StubSession:
+        def post(self, *args, **kwargs):
+            # Record the POST request for cross-process assertion
+            with open(post_count_path, "a") as f:
+                f.write("POST\n")
+            class R:
+                def raise_for_status(self): pass
+                def json(self): return {"number": 99, "html_url": "http://gh/99"}
+                status_code = 201
+            return R()
+        def mount(self, *args, **kwargs): pass
+
+    exp = GitHubIssueExporter(
+        repo="owaspcornucopia/ThreatSutra", token="fake-token",
+        dry_run=False, markers_dir=markers_dir,
+        session=StubSession(),
+    )
+    result = exp.export(review_record)
+    Path(result_path).write_text(_json.dumps(result))
+
+
+def test_cross_process_export_lock_crash_recovery(tmp_path):
+    """Issue #56: Cross-process regression test using multiprocessing.
+
+    1. Process A acquires the ExportLock and blocks before POST.
+    2. Process B attempts export() and must receive concurrent_lock.
+    3. Process A exits (lock released by OS).
+    4. Process B retries and successfully acquires the lock + creates.
+    5. Exactly one POST occurs across both processes.
+    6. A's exit never removes or invalidates B's lock.
+    """
+    import multiprocessing
+    import time
+
+    exporter = GitHubIssueExporter(
+        repo="owaspcornucopia/ThreatSutra", token="fake-token",
+        dry_run=False, markers_dir=str(tmp_path),
+    )
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    lock_path = exporter._lock_path(key)
+    ready_flag = tmp_path / "a_ready.flag"
+    result_b_path = tmp_path / "result_b.json"
+    post_count_path = tmp_path / "post_count.txt"
+    post_count_path.write_text("")  # initialize empty
+
+    # Step 1: Process A acquires the lock and blocks
+    proc_a = multiprocessing.Process(
+        target=_mp_worker_block,
+        args=(str(lock_path), str(tmp_path), str(ready_flag), REVIEW_RECORD),
+    )
+    proc_a.start()
+
+    # Wait for A to signal it holds the lock
+    for _ in range(100):
+        if ready_flag.exists():
+            break
+        time.sleep(0.05)
+    assert ready_flag.exists(), "Process A did not acquire lock in time"
+
+    # Step 2: Process B attempts export while A holds the lock
+    proc_b = multiprocessing.Process(
+        target=_mp_worker_export,
+        args=(str(tmp_path), REVIEW_RECORD, str(result_b_path), str(post_count_path)),
+    )
+    proc_b.start()
+    proc_b.join(timeout=10)
+    assert result_b_path.exists(), "Process B did not write result"
+    result_b1 = json.loads(result_b_path.read_text())
+    assert result_b1["status"] == "error_recoverable"
+    assert result_b1["reason"] == "concurrent_lock"
+
+    # Step 3: Tell A to crash
+    ready_flag.unlink(missing_ok=True)
+    proc_a.join(timeout=10)
+    assert not proc_a.is_alive()
+    assert proc_a.exitcode == 1  # Verify it hard-crashed
+
+    # Step 4: Process B retries — should now succeed
+    result_b_path.unlink(missing_ok=True)
+    proc_b2 = multiprocessing.Process(
+        target=_mp_worker_export,
+        args=(str(tmp_path), REVIEW_RECORD, str(result_b_path), str(post_count_path)),
+    )
+    proc_b2.start()
+    proc_b2.join(timeout=10)
+    assert result_b_path.exists(), "Process B retry did not write result"
+    result_b2 = json.loads(result_b_path.read_text())
+    assert result_b2["status"] == "created"
+    assert result_b2["marker"]["github_issue_number"] == 99
+
+    # Step 5: Verify exactly ONE post was made
+    post_lines = [line for line in post_count_path.read_text().splitlines() if line]
+    assert len(post_lines) == 1, f"Expected exactly 1 POST across processes, got {len(post_lines)}"
