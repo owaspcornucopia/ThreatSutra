@@ -6,28 +6,30 @@ on:
   pull_request:
     branches: [main]
 
-permissions:
-  contents: read
-  id-token: write
-
 jobs:
   lint:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - run: pip install -r requirements.txt
       - run: ruff check src/ tests/
       - run: mypy src/ --ignore-missing-imports
 
   test:
-    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     needs: lint
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.14"]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -41,10 +43,9 @@ jobs:
           --cov-report=xml:coverage.xml
           --cov-fail-under=95
       - name: Upload coverage to Qlty
-        if: matrix.python-version == '3.12'
+        if: matrix.python-version == '3.14' && matrix.os == 'ubuntu-latest'
         uses: qltysh/qlty-action/coverage@08a0a862c159eae9b9003081da6663d96efef637
         with:
           oidc: true
-          token: ${{ secrets.QLTY_COVERAGE_TOKEN }}
           files: coverage.xml
           format: cobertura
