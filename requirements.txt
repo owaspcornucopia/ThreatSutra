@@ -4,5 +4,5 @@ requests>=2.34.2
 portalocker>=4.3.2
 pytest>=9.1.1
 pytest-cov>=7.1.0
-ruff>=0.16.7
+ruff>=0.16.8
 mypy>=2.3.1
