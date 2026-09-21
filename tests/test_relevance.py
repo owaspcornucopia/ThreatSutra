@@ -1,5 +1,5 @@
 from dataclasses import FrozenInstanceError
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
@@ -28,16 +28,12 @@ def test_assess_relevance_with_linked_issues():
     assert assessment.score == 5
     assert assessment.assessed_issue_urls == tuple(context.linked_issue_urls)
 
-@patch('src.relevance.GitHubIssueClient')
-def test_assess_relevance_default_issue_client(mock_github_issue_client_class):
-    mock_issue_client = mock_github_issue_client_class.return_value
-    mock_issue_client.get_issues.return_value = []
+def test_assess_relevance_requires_issue_client():
+    """Issue #26: assess_relevance must raise if no issue_client is provided (deny-by-default)."""
     mock_call_ai_model = Mock(return_value='{"score": 3, "explanation": "Low."}')
     context = build_context()
-    assessment = assess_relevance(context, mock_call_ai_model)
-    mock_github_issue_client_class.assert_called_once()
-    mock_issue_client.get_issues.assert_called_once_with(context.linked_issue_urls)
-    assert assessment.score == 3
+    with pytest.raises(ValueError, match="issue_client is required"):
+        assess_relevance(context, mock_call_ai_model)
 
 def test_assess_relevance_propagates_ai_error():
     mock_call_ai_model = Mock(side_effect=RuntimeError("AI failed"))

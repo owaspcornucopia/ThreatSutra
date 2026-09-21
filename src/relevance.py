@@ -27,7 +27,8 @@ def assess_relevance(context: AnalysisContext, call_ai_model, issue_client: GitH
     Fetches the threat's linked GitHub issues and scores their relevance to the milestone. `call_ai_model` is 
     injected (rather than imported from orchestrator) to avoid a circular import and to keep this testable without a live model call.
     """
-    issue_client = issue_client or GitHubIssueClient()
+    if issue_client is None:
+        raise ValueError("issue_client is required — caller must supply a GitHubIssueClient with an allowlist.")
     linked_issues = issue_client.get_issues(context.linked_issue_urls)
     prompt = build_relevance_prompt(context, linked_issues)
     response_text = call_ai_model(prompt)

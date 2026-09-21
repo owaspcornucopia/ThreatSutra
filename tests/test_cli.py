@@ -101,6 +101,66 @@ def test_save_output(monkeypatch, tmp_path):
     assert data["artifact_type"] == "evil_user_story"
     assert data["relevance"]["score"] == 8
 
+def test_save_output_prevents_duplicate_filenames_via_milliseconds(monkeypatch, tmp_path):
+    """Issue #13: Calling save_output very quickly must not result in identical filenames."""
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    fake_cli_py = src_dir / "cli.py"
+    monkeypatch.setattr(src.cli, "__file__", str(fake_cli_py))
+    context = build_context()
+    artifact = {
+        "artifact_type": "evil_user_story",
+        "text": "test",
+        "source_threat_id": "T1",
+        "source_card_id": "C1",
+        "source_milestone_number": 1,
+    }
+    relevance = RelevanceAssessment(
+        score=8, color="green", explanation="Relevant", assessed_issue_urls=()
+    )
+    out_path_1 = save_output(context, artifact, relevance, "approve")
+    out_path_2 = save_output(context, artifact, relevance, "approve")
+    
+    assert out_path_1 != out_path_2
+    assert os.path.exists(out_path_1)
+    assert os.path.exists(out_path_2)
+
+def test_save_output_retries_on_file_exists_error(monkeypatch, tmp_path):
+    """Ensure that save_output retries when os.open raises FileExistsError."""
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    fake_cli_py = src_dir / "cli.py"
+    monkeypatch.setattr(src.cli, "__file__", str(fake_cli_py))
+    
+    # Mock os.open to raise FileExistsError the first time, then succeed
+    original_open = os.open
+    open_calls = 0
+    
+    def mock_open(*args, **kwargs):
+        nonlocal open_calls
+        open_calls += 1
+        if open_calls == 1:
+            raise FileExistsError("Simulated collision")
+        return original_open(*args, **kwargs)
+        
+    monkeypatch.setattr(os, "open", mock_open)
+    
+    context = build_context()
+    artifact = {
+        "artifact_type": "evil_user_story",
+        "text": "test retry",
+        "source_threat_id": "T1",
+        "source_card_id": "C1",
+        "source_milestone_number": 1,
+    }
+    relevance = RelevanceAssessment(score=8, color="green", explanation="Relevant", assessed_issue_urls=())
+    
+    out_path = save_output(context, artifact, relevance, "approve")
+    
+    # It must have called os.open twice (first failed, second succeeded)
+    assert open_calls == 2
+    assert os.path.exists(out_path)
+
 
 def test_print_relevance_green(capsys):
     relevance = RelevanceAssessment(
@@ -289,6 +349,32 @@ def test_review_artifact_created(monkeypatch, capsys, tmp_path):
     review_artifact(context, artifact, relevance, exporter)
     captured = capsys.readouterr()
     assert "Exported as url456" in captured.out
+
+def test_review_artifact_error_recoverable(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(src.cli, "ask_for_approval", lambda: "approve")
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    monkeypatch.setattr(src.cli, "__file__", str(src_dir / "cli.py"))
+    exporter = MagicMock()
+    exporter.export.return_value = {
+        "status": "error_recoverable",
+        "reason": "search_failed",
+    }
+    context = build_context()
+    artifact = {
+        "artifact_type": "evil_user_story",
+        "text": "text",
+        "source_threat_id": "T1",
+        "source_card_id": "C1",
+        "source_milestone_number": 1,
+    }
+    relevance = RelevanceAssessment(
+        score=8, color="green", explanation="Relevant", assessed_issue_urls=()
+    )
+    review_artifact(context, artifact, relevance, exporter)
+    captured = capsys.readouterr()
+    assert "[RETRY]" in captured.out
+    assert "search_failed" in captured.out
 
 def test_main_gemini_service_error_exits(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["cli.py"])

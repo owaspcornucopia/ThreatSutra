@@ -8,7 +8,6 @@ import hashlib
 import json
 import os
 from datetime import datetime, timezone
-
 from src.validation import validate_threat, validate_threat_dragon_document
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -73,4 +72,3 @@ class ThreatDragonReader:        #Reads validated threat records out of a Threat
     def read_threats(self) -> list:
         """Returns just the threat list, preserving the original public API used by existing callers."""
         return self.read_threat_source()["threats"]            
-

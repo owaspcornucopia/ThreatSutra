@@ -3,7 +3,6 @@
    we can tweak wording without touching the logic that calls the AI.
 """
 import json
-
 from src.context import AnalysisContext
 from src.validation import CHARS_PER_TOKEN_ESTIMATE, ValidationError
 

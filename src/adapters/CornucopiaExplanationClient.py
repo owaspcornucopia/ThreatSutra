@@ -13,11 +13,9 @@ import hashlib
 import re
 from datetime import datetime, timezone
 from urllib.parse import quote
-
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-
 from src.validation import validate_explanation_sections
 
 REPOSITORY = "OWASP/cornucopia"
