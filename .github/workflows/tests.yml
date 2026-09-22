@@ -49,3 +49,4 @@ jobs:
           token: ${{ secrets.QLTY_COVERAGE_TOKEN }}
           files: coverage.xml
           skip-errors: false
+          add-prefix: src/
