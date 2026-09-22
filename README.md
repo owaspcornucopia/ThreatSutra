@@ -206,5 +206,7 @@ This project is licensed under the terms described in [`LICENSE.md`](LICENSE.md)
 ---
 
 *Repository URL*: https://github.com/owaspcornucopia/ThreatSutra
+
 *Mentor*: Johan Sydseter[OWASP Cornucopia co-project leader]
-*Mentee*: Mahaboobunnisa Md[Contributor]
+
+*Mentee*: Mahaboobunnisa Md[Maintainer]
