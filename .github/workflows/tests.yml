@@ -46,7 +46,6 @@ jobs:
         if: matrix.python-version == '3.14' && matrix.os == 'ubuntu-latest'
         uses: qltysh/qlty-action/coverage@08a0a862c159eae9b9003081da6663d96efef637
         with:
-          oidc: true
           token: ${{ secrets.QLTY_COVERAGE_TOKEN }}
           files: coverage.xml
           format: cobertura
