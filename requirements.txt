@@ -1,7 +1,7 @@
 google-genai
 python-dotenv>=1.2.3
 requests>=2.34.2
-portalocker>=4.3.2
+portalocker>=4.4.0
 pytest>=9.1.1
 pytest-cov>=7.1.0
 ruff>=0.16.8
