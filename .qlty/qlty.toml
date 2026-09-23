@@ -1,0 +1,10 @@
+# Qlty configuration for ThreatSutra
+# Excludes test files from Security and Maintainability analysis
+# so that only production code (src/) is graded.
+#
+# For configuration reference, visit https://qlty.sh/d/qlty-toml
+config_version = "0"
+
+exclude_patterns = [
+    "tests/**",
+]
