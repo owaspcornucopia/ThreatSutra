@@ -2,6 +2,7 @@
 
 [![Maintainability](https://qlty.sh/gh/owaspcornucopia/projects/ThreatSutra/maintainability.svg)](https://qlty.sh/gh/owaspcornucopia/projects/ThreatSutra)
 [![Coverage](https://qlty.sh/gh/owaspcornucopia/projects/ThreatSutra/coverage.svg)](https://qlty.sh/gh/owaspcornucopia/projects/ThreatSutra)
+[![Security](https://qlty.sh/gh/owaspcornucopia/projects/ThreatSutra/security.svg)](https://qlty.sh/gh/owaspcornucopia/projects/ThreatSutra)
 
 # OWASP Cornucopia - ThreatSutra
 
@@ -176,6 +177,7 @@ Review records are written to `outputs/` as timestamped JSON files. Export marke
 |--------|-------|
 | **Total tests** | **204 / 204 passing** |
 | **Coverage** | [![Coverage](https://qlty.sh/gh/owaspcornucopia/projects/ThreatSutra/coverage.svg)](https://qlty.sh/gh/owaspcornucopia/projects/ThreatSutra) |
+| **Security** | [![Security](https://qlty.sh/gh/owaspcornucopia/projects/ThreatSutra/security.svg)](https://qlty.sh/gh/owaspcornucopia/projects/ThreatSutra) |
 | **CI** | ![CI: passing](https://github.com/owaspcornucopia/ThreatSutra/actions/workflows/tests.yml/badge.svg) (Python 3.14) |
 | **Coverage gate** | `--cov-fail-under=95` enforced in CI |
 | **Lint / Types** | `ruff` and `mypy` enforced in CI |
