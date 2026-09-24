@@ -108,38 +108,49 @@ def test_revised_template_version_produces_same_idempotency_key(tmp_path):
     other = {**REVIEW_RECORD, "prompt_template_version": "v2"}
     assert exporter._idempotency_key(REVIEW_RECORD) == exporter._idempotency_key(other)
 
-def test_concurrent_reservation_prevents_duplicate_export(tmp_path):
-    """A fresh pending marker (< 5 min) means another process may be in-flight
-    or the previous process crashed before POST.  Must NOT return false
-    'already_exported' — must return error_recoverable so caller retries."""
+def test_pre_post_marker_recovers_immediately(tmp_path, monkeypatch):
+    """A marker with phase 'pre_post' means the previous process definitely
+    crashed before attempting POST. It immediately retries without searching."""
     from datetime import datetime, timezone
-    exporter = make_exporter(tmp_path, dry_run=True)
-    key = exporter._idempotency_key(REVIEW_RECORD)
-    marker_path = exporter._marker_path(key)
-    # pre-create fresh pending reservation
-    marker_path.write_text(f'{{"status": "pending", "created_at": "{datetime.now(timezone.utc).isoformat()}", "schema_version": "2"}}')
-    result = exporter.export(REVIEW_RECORD)
-    assert result["status"] == "error_recoverable"
-    assert result["reason"] == "export_in_flight"
-
-def test_stale_pending_marker_is_recovered(tmp_path, monkeypatch):
-    from datetime import datetime, timezone, timedelta
     monkeypatch.setenv("GITHUB_API", "fake-token")
     exporter = make_exporter(tmp_path, dry_run=False)
     key = exporter._idempotency_key(REVIEW_RECORD)
     marker_path = exporter._marker_path(key)
-    stale_time = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
-    marker_path.write_text(f'{{"status": "pending", "created_at": "{stale_time}"}}')
-    # Mock search to return an existing issue
+    marker_path.write_text(f'{{"status": "pending", "phase": "pre_post", "created_at": "{datetime.now(timezone.utc).isoformat()}", "schema_version": "2"}}')
+    
     class MockSession:
-        def get(self, *args, **kwargs):
-            class MockResponse:
+        def post(self, *args, **kwargs):
+            class R:
                 def raise_for_status(self): pass
-                def json(self):
-                    return {"total_count": 1, "items": [{"number": 99, "html_url": "http://gh/99"}]}
-            return MockResponse()
+                def json(self): return {"number": 88, "html_url": "http://gh/88"}
+                status_code = 201
+            return R()
         def mount(self, *args, **kwargs): pass
     exporter.session = MockSession()
+    
+    result = exporter.export(REVIEW_RECORD)
+    assert result["status"] == "created"
+    assert result["marker"]["github_issue_number"] == 88
+
+def test_post_attempted_marker_reconciles(tmp_path, monkeypatch):
+    """A marker with phase 'post_attempted' means a POST might have happened.
+    It MUST search GitHub first to reconcile."""
+    from datetime import datetime, timezone
+    monkeypatch.setenv("GITHUB_API", "fake-token")
+    exporter = make_exporter(tmp_path, dry_run=False)
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    marker_path = exporter._marker_path(key)
+    marker_path.write_text(f'{{"status": "pending", "phase": "post_attempted", "created_at": "{datetime.now(timezone.utc).isoformat()}", "schema_version": "2"}}')
+    
+    class MockSession:
+        def get(self, *args, **kwargs):
+            class R:
+                def raise_for_status(self): pass
+                def json(self): return {"total_count": 1, "items": [{"number": 99, "html_url": "http://gh/99"}]}
+            return R()
+        def mount(self, *args, **kwargs): pass
+    exporter.session = MockSession()
+    
     result = exporter.export(REVIEW_RECORD)
     assert result["status"] == "already_exported"
     assert result["marker"]["github_issue_number"] == 99
@@ -772,38 +783,186 @@ def test_export_lock_contention(tmp_path):
         a.release()
 
 
-# ---- Cross-process regression test (Issue #56) ----
-# Top-level functions required for Windows multiprocessing spawn.
+# ---- Coverage tests for error/edge branches ----
 
-def _mp_worker_block(lock_path_str, markers_dir, ready_flag_path, review_record):
-    """Process A: acquire lock, signal ready, then HARD CRASH."""
-    import os
-    import time
-    from src.adapters.GitHubIssueExporter import ExportLock
-    from pathlib import Path
-    lock = ExportLock(Path(lock_path_str))
+def test_export_lock_acquire_fdopen_failure(tmp_path, monkeypatch):
+    """Cover line 64: os.close(fd) when fdopen itself fails."""
+    lock_path = tmp_path / "fdopen_fail.lock"
+    # Make os.fdopen raise so the raw fd path (line 64) is hit
+    monkeypatch.setattr("os.fdopen", lambda fd, *a, **k: (_ for _ in ()).throw(OSError("fdopen failed")))
+    lock = ExportLock(lock_path)
+    with pytest.raises(OSError, match="fdopen failed"):
+        lock.acquire()
+    assert lock._file is None
+
+
+def test_export_lock_release_unlock_failure(tmp_path, monkeypatch):
+    """Cover lines 78-79: portalocker.unlock raises during release."""
+    import portalocker
+    lock_path = tmp_path / "unlock_fail.lock"
+    lock = ExportLock(lock_path)
     lock.acquire()
-    # Signal that we hold the lock
-    Path(ready_flag_path).write_text("ready")
-    # Block until the main test acknowledges the flag
-    for _ in range(100):
-        if not Path(ready_flag_path).exists():
-            # Main test consumed the flag, simulate sudden process death
-            os._exit(1)
-        time.sleep(0.05)
-    # Failsafe if main test hangs
-    os._exit(1)
+    # Monkeypatch portalocker.unlock to raise
+    monkeypatch.setattr(portalocker, "unlock", lambda f: (_ for _ in ()).throw(OSError("unlock failed")))
+    # release() should log warning but not raise, and should close the file
+    lock.release()
+    assert lock._file is None
 
 
-def _mp_worker_export(markers_dir, review_record, result_path, post_count_path):
-    """Process B: attempt export() — should get concurrent_lock while A holds it."""
-    import json as _json
+def test_atomic_write_exception_cleans_temp(tmp_path):
+    """Cover lines 164-167: _atomic_write exception branch cleans up temp file."""
+    from unittest.mock import patch
+    exporter = make_exporter(tmp_path, dry_run=True)
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    marker_path = exporter._marker_path(key)
+    # Write existing content
+    marker_path.write_text('{"old": true}')
+    with patch("os.replace", side_effect=OSError("disk full")):
+        with pytest.raises(OSError, match="disk full"):
+            exporter._atomic_write(marker_path, '{"new": true}')
+    # Original content preserved, no temp files left
+    assert marker_path.read_text() == '{"old": true}'
+    assert list(tmp_path.glob(".tmp_*")) == []
+
+
+def test_search_invalid_total_count_returns_none(tmp_path, monkeypatch):
+    """Cover line 211: _search_github_for_marker returns None for non-int total_count."""
+    monkeypatch.setenv("GITHUB_API", "fake-token")
+    exporter = make_exporter(tmp_path, dry_run=False)
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    class MockSession:
+        def get(self, *args, **kwargs):
+            class R:
+                def raise_for_status(self): pass
+                def json(self): return {"total_count": "not_an_int"}
+            return R()
+        def mount(self, *args, **kwargs): pass
+    exporter.session = MockSession()
+    result = exporter._search_github_for_marker(key)
+    assert result is None
+
+
+def test_reconcile_atomic_write_oserror(tmp_path, monkeypatch):
+    """Cover lines 285-286: _reconcile_with_github returns io_error when _atomic_write raises OSError."""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    monkeypatch.setenv("GITHUB_API", "fake-token")
+    exporter = make_exporter(tmp_path, dry_run=False)
+    key = exporter._idempotency_key(REVIEW_RECORD)
+    marker_path = exporter._marker_path(key)
+    # Pre-create a stale pending marker without phase (triggers reconcile)
+    marker_path.write_text(json.dumps({"status": "pending", "created_at": "2020-01-01T00:00:00+00:00"}))
+    # Mock search to return 0 results (so reconcile tries to write fresh pending)
+    class MockSession:
+        def get(self, *args, **kwargs):
+            class R:
+                def raise_for_status(self): pass
+                def json(self): return {"total_count": 0}
+            return R()
+        def mount(self, *args, **kwargs): pass
+    exporter.session = MockSession()
+    # Patch _atomic_write to raise OSError only when writing the fresh pending marker
+    original_aw = type(exporter)._atomic_write
+    call_count = [0]
+    def failing_aw(self, path, content):
+        call_count[0] += 1
+        if '"phase": "pre_post"' in content:
+            raise OSError("disk full")
+        return original_aw(self, path, content)
+    monkeypatch.setattr(type(exporter), "_atomic_write", failing_aw)
+    result = exporter._reconcile_with_github(marker_path, key, REVIEW_RECORD)
+    assert result == {"status": "error_recoverable", "reason": "io_error"}
+
+
+def test_post_response_non_dict_body(tmp_path, monkeypatch):
+    """Cover line 431: POST response.json() returns a non-dict (e.g., list)."""
+    monkeypatch.setenv("GITHUB_API", "fake-token")
+    exporter = make_exporter(tmp_path, dry_run=False)
+    class MockSession:
+        def post(self, *args, **kwargs):
+            class R:
+                def raise_for_status(self): pass
+                def json(self): return ["not", "a", "dict"]
+                status_code = 201
+            return R()
+        def mount(self, *args, **kwargs): pass
+    exporter.session = MockSession()
+    result = exporter.export(REVIEW_RECORD)
+    assert result["status"] == "error_recoverable"
+    assert result["reason"] == "invalid_post_response"
+
+
+def test_post_response_invalid_number_or_url(tmp_path, monkeypatch):
+    """Cover line 441: POST response has invalid number or html_url."""
+    monkeypatch.setenv("GITHUB_API", "fake-token")
+    exporter = make_exporter(tmp_path, dry_run=False)
+    class MockSession:
+        def post(self, *args, **kwargs):
+            class R:
+                def raise_for_status(self): pass
+                def json(self): return {"number": "not_int", "html_url": "http://gh/1"}
+                status_code = 201
+            return R()
+        def mount(self, *args, **kwargs): pass
+    exporter.session = MockSession()
+    result = exporter.export(REVIEW_RECORD)
+    assert result["status"] == "error_recoverable"
+    assert result["reason"] == "invalid_post_response"
+
+
+# ---- Cross-process regression test (Issue #56) ----
+def _mp_worker_export_crash(markers_dir, review_record, ready_flag_path, crash_phase, post_count_path):
+    import os, time
     from pathlib import Path
     from src.adapters.GitHubIssueExporter import GitHubIssueExporter
 
-    class StubSession:
+    class CrashSession:
+        def get(self, *args, **kwargs):
+            class R:
+                def raise_for_status(self): pass
+                def json(self): return {"total_count": 0}
+            return R()
         def post(self, *args, **kwargs):
-            # Record the POST request for cross-process assertion
+            with open(post_count_path, "a") as f:
+                f.write("POST\n")
+            if crash_phase == "post_attempted":
+                Path(ready_flag_path).write_text("ready")
+                time.sleep(999) # block forever until SIGKILL
+            class R:
+                def raise_for_status(self): pass
+                def json(self): return {"number": 99, "html_url": "http://gh/99"}
+                status_code = 201
+            return R()
+        def mount(self, *args, **kwargs): pass
+
+    class CrashExporter(GitHubIssueExporter):
+        def _atomic_write(self, path: Path, content: str) -> None:
+            super()._atomic_write(path, content)
+            if crash_phase == "pre_post" and '"phase": "pre_post"' in content:
+                Path(ready_flag_path).write_text("ready")
+                time.sleep(999) # block forever until SIGKILL
+
+    exp = CrashExporter(
+        repo="owaspcornucopia/ThreatSutra", token="fake-token",
+        dry_run=False, markers_dir=markers_dir,
+        session=CrashSession(),
+    )
+    exp.export(review_record)
+
+def _mp_worker_export_recover(markers_dir, review_record, result_path, post_count_path, crash_phase):
+    import json as _json
+    from pathlib import Path
+    from src.adapters.GitHubIssueExporter import GitHubIssueExporter
+    class StubSession:
+        def get(self, *args, **kwargs):
+            class R:
+                def raise_for_status(self): pass
+                def json(self):
+                    if crash_phase == "post_attempted":
+                        return {"total_count": 1, "items": [{"number": 99, "html_url": "http://gh/99"}]}
+                    return {"total_count": 0}
+            return R()
+        def post(self, *args, **kwargs):
             with open(post_count_path, "a") as f:
                 f.write("POST\n")
             class R:
@@ -812,85 +971,94 @@ def _mp_worker_export(markers_dir, review_record, result_path, post_count_path):
                 status_code = 201
             return R()
         def mount(self, *args, **kwargs): pass
-
     exp = GitHubIssueExporter(
         repo="owaspcornucopia/ThreatSutra", token="fake-token",
-        dry_run=False, markers_dir=markers_dir,
-        session=StubSession(),
+        dry_run=False, markers_dir=markers_dir, session=StubSession()
     )
     result = exp.export(review_record)
     Path(result_path).write_text(_json.dumps(result))
 
+def test_cross_process_export_lock_crash_recovery_post_attempted(tmp_path):
+    import multiprocessing, time, json, sys
+    for _ in range(20):
+        # Clean state for each iteration
+        for child in tmp_path.iterdir():
+            if child.is_file():
+                child.unlink()
+        
+        ready_flag = tmp_path / "a_ready.flag"
+        result_b_path = tmp_path / "result_b.json"
+        post_count_path = tmp_path / "post_count.txt"
+        post_count_path.write_text("")
+        
+        proc_a = multiprocessing.Process(
+            target=_mp_worker_export_crash,
+            args=(str(tmp_path), REVIEW_RECORD, str(ready_flag), "post_attempted", str(post_count_path)),
+        )
+        proc_a.start()
+        
+        for _ in range(100):
+            if ready_flag.exists():
+                break
+            time.sleep(0.05)
+        assert ready_flag.exists()
+        
+        proc_a.kill()
+        proc_a.join(timeout=10)
+        if sys.platform != "win32":
+            assert proc_a.exitcode < 0
+        
+        proc_b = multiprocessing.Process(
+            target=_mp_worker_export_recover,
+            args=(str(tmp_path), REVIEW_RECORD, str(result_b_path), str(post_count_path), "post_attempted"),
+        )
+        proc_b.start()
+        proc_b.join(timeout=10)
+        
+        result_b = json.loads(result_b_path.read_text())
+        assert result_b["status"] == "already_exported"
+        
+        post_lines = [line for line in post_count_path.read_text().splitlines() if line]
+        assert len(post_lines) == 1, f"Expected 1 POST, got {len(post_lines)}"
 
-def test_cross_process_export_lock_crash_recovery(tmp_path):
-    """Issue #56: Cross-process regression test using multiprocessing.
-
-    1. Process A acquires the ExportLock and blocks before POST.
-    2. Process B attempts export() and must receive concurrent_lock.
-    3. Process A exits (lock released by OS).
-    4. Process B retries and successfully acquires the lock + creates.
-    5. Exactly one POST occurs across both processes.
-    6. A's exit never removes or invalidates B's lock.
-    """
-    import multiprocessing
-    import time
-
-    exporter = GitHubIssueExporter(
-        repo="owaspcornucopia/ThreatSutra", token="fake-token",
-        dry_run=False, markers_dir=str(tmp_path),
-    )
-    key = exporter._idempotency_key(REVIEW_RECORD)
-    lock_path = exporter._lock_path(key)
-    ready_flag = tmp_path / "a_ready.flag"
-    result_b_path = tmp_path / "result_b.json"
-    post_count_path = tmp_path / "post_count.txt"
-    post_count_path.write_text("")  # initialize empty
-
-    # Step 1: Process A acquires the lock and blocks
-    proc_a = multiprocessing.Process(
-        target=_mp_worker_block,
-        args=(str(lock_path), str(tmp_path), str(ready_flag), REVIEW_RECORD),
-    )
-    proc_a.start()
-
-    # Wait for A to signal it holds the lock
-    for _ in range(100):
-        if ready_flag.exists():
-            break
-        time.sleep(0.05)
-    assert ready_flag.exists(), "Process A did not acquire lock in time"
-
-    # Step 2: Process B attempts export while A holds the lock
-    proc_b = multiprocessing.Process(
-        target=_mp_worker_export,
-        args=(str(tmp_path), REVIEW_RECORD, str(result_b_path), str(post_count_path)),
-    )
-    proc_b.start()
-    proc_b.join(timeout=10)
-    assert result_b_path.exists(), "Process B did not write result"
-    result_b1 = json.loads(result_b_path.read_text())
-    assert result_b1["status"] == "error_recoverable"
-    assert result_b1["reason"] == "concurrent_lock"
-
-    # Step 3: Tell A to crash
-    ready_flag.unlink(missing_ok=True)
-    proc_a.join(timeout=10)
-    assert not proc_a.is_alive()
-    assert proc_a.exitcode == 1  # Verify it hard-crashed
-
-    # Step 4: Process B retries — should now succeed
-    result_b_path.unlink(missing_ok=True)
-    proc_b2 = multiprocessing.Process(
-        target=_mp_worker_export,
-        args=(str(tmp_path), REVIEW_RECORD, str(result_b_path), str(post_count_path)),
-    )
-    proc_b2.start()
-    proc_b2.join(timeout=10)
-    assert result_b_path.exists(), "Process B retry did not write result"
-    result_b2 = json.loads(result_b_path.read_text())
-    assert result_b2["status"] == "created"
-    assert result_b2["marker"]["github_issue_number"] == 99
-
-    # Step 5: Verify exactly ONE post was made
-    post_lines = [line for line in post_count_path.read_text().splitlines() if line]
-    assert len(post_lines) == 1, f"Expected exactly 1 POST across processes, got {len(post_lines)}"
+def test_cross_process_export_lock_crash_recovery_pre_post(tmp_path):
+    import multiprocessing, time, json, sys
+    for _ in range(20):
+        for child in tmp_path.iterdir():
+            if child.is_file():
+                child.unlink()
+        
+        ready_flag = tmp_path / "a_ready.flag"
+        result_b_path = tmp_path / "result_b.json"
+        post_count_path = tmp_path / "post_count.txt"
+        post_count_path.write_text("")
+        
+        proc_a = multiprocessing.Process(
+            target=_mp_worker_export_crash,
+            args=(str(tmp_path), REVIEW_RECORD, str(ready_flag), "pre_post", str(post_count_path)),
+        )
+        proc_a.start()
+        
+        for _ in range(100):
+            if ready_flag.exists():
+                break
+            time.sleep(0.05)
+        assert ready_flag.exists()
+        
+        proc_a.kill()
+        proc_a.join(timeout=10)
+        if sys.platform != "win32":
+            assert proc_a.exitcode < 0
+        
+        proc_b = multiprocessing.Process(
+            target=_mp_worker_export_recover,
+            args=(str(tmp_path), REVIEW_RECORD, str(result_b_path), str(post_count_path), "pre_post"),
+        )
+        proc_b.start()
+        proc_b.join(timeout=10)
+        
+        result_b = json.loads(result_b_path.read_text())
+        assert result_b["status"] == "created"
+        
+        post_lines = [line for line in post_count_path.read_text().splitlines() if line]
+        assert len(post_lines) == 1, f"Expected 1 POST, got {len(post_lines)}"

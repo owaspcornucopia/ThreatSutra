@@ -84,15 +84,31 @@ def save_output(context, artifact: dict, relevance, decision: str) -> str:
         ],
     }
     
+    import tempfile
     while True:
         time_str = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
         unique_suffix = uuid.uuid4().hex[:8]
         filename = f"review_{time_str}_{unique_suffix}.json"
         output_path = os.path.join(output_dir, filename)
         try:
+            # Atomically reserve the destination filename
             fd = os.open(output_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(output_data, f, indent=4, ensure_ascii=False)
+            os.close(fd)
+            
+            # Fill it via atomic mkstemp+fsync+replace
+            temp_fd, temp_path = tempfile.mkstemp(dir=output_dir, prefix=".tmp_")
+            try:
+                with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+                    json.dump(output_data, f, indent=4, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_path, output_path)
+            except Exception:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+                raise
             break
         except FileExistsError:
             continue

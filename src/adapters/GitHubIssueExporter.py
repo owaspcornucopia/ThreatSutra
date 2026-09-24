@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 import portalocker
@@ -20,7 +21,6 @@ from src.validation import (
 )
 
 DEFAULT_TIMEOUT_SECONDS = 10
-PENDING_TIMEOUT_SECONDS = 300
 RETRY_TOTAL = 3
 RETRY_BACKOFF_FACTOR = 0.5
 RETRY_STATUS_CODES = (429, 500, 502, 503, 504)
@@ -153,6 +153,19 @@ class GitHubIssueExporter:
         """Path for the per-key exclusive lock file."""
         return self.markers_dir / f"{key}.lock"
 
+    def _atomic_write(self, path: Path, content: str) -> None:
+        fd, temp_path = tempfile.mkstemp(dir=path.parent, prefix=".tmp_")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, path)
+        except Exception:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise
+
     def _build_title_and_body(self, artifact: dict, key: str) -> tuple:
         label = ARTIFACT_TITLES[artifact["artifact_type"]]
         title = sanitize_text(f"[ThreatSutra] {label}: {artifact['text']}"[:250])
@@ -256,18 +269,19 @@ class GitHubIssueExporter:
                 "provenance": review_record.get("provenance"),
                 "schema_version": MARKER_SCHEMA_VERSION,
             }
-            marker_path.write_text(json.dumps(marker, indent=2))
+            self._atomic_write(marker_path, json.dumps(marker, indent=2))
             return {"status": "already_exported", "marker": marker}
 
         # Search succeeded, no match — overwrite the stale marker with a fresh
         # pending marker so the caller can POST.
         pending_content = json.dumps({
             "status": "pending",
+            "phase": "pre_post",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "schema_version": MARKER_SCHEMA_VERSION,
         })
         try:
-            marker_path.write_text(pending_content)
+            self._atomic_write(marker_path, pending_content)
         except OSError:
             return {"status": "error_recoverable", "reason": "io_error"}
         return None
@@ -293,28 +307,14 @@ class GitHubIssueExporter:
         if marker_version and marker_version != MARKER_SCHEMA_VERSION:
             return self._reconcile_with_github(marker_path, key, review_record)
 
-        created_at_str = existing_marker.get("created_at")
-        if not created_at_str:
-            timed_out = True
-        else:
-            try:
-                created_at = datetime.fromisoformat(str(created_at_str))
-                # If naive, treat as timed out to force reconciliation
-                if created_at.tzinfo is None:
-                    timed_out = True
-                else:
-                    timed_out = (datetime.now(timezone.utc) - created_at).total_seconds() > PENDING_TIMEOUT_SECONDS
-            except (ValueError, TypeError):
-                timed_out = True
+        phase = existing_marker.get("phase")
+        if phase == "pre_post":
+            # The previous process crashed before POST. Safe to immediately retry.
+            return None
 
-        if timed_out:
-            return self._reconcile_with_github(marker_path, key, review_record)
-
-        # Fresh pending marker: another process may be in-flight, or the
-        # previous process crashed after marker creation but before POST.
-        # Returning "already_exported" would be a lie — no issue URL exists.
-        # Return error_recoverable so the caller knows to retry later.
-        return {"status": "error_recoverable", "reason": "export_in_flight"}
+        # phase is "post_attempted" or missing (legacy/corrupt). 
+        # Ambiguous state! Must search GitHub.
+        return self._reconcile_with_github(marker_path, key, review_record)
 
     def export(self, review_record: dict) -> dict:
         """
@@ -383,10 +383,11 @@ class GitHubIssueExporter:
                 # No marker exists — write a fresh pending marker.
                 pending_content = json.dumps({
                     "status": "pending",
+                    "phase": "pre_post",
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "schema_version": MARKER_SCHEMA_VERSION,
                 })
-                marker_path.write_text(pending_content)
+                self._atomic_write(marker_path, pending_content)
 
             # --- POST the GitHub issue ---
             title, body = self._build_title_and_body(artifact, key)
@@ -398,6 +399,15 @@ class GitHubIssueExporter:
                 raise RuntimeError(
                     "GITHUB_API token is required for live export (see .env.example)."
                 )
+
+            attempted_content = json.dumps({
+                "status": "pending",
+                "phase": "post_attempted",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "schema_version": MARKER_SCHEMA_VERSION,
+            })
+            self._atomic_write(marker_path, attempted_content)
+
             url = f"https://api.github.com/repos/{self.repo}/issues"
             headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {self.token}"}
             try:
@@ -443,7 +453,7 @@ class GitHubIssueExporter:
                 "provenance": review_record.get("provenance"),
                 "schema_version": MARKER_SCHEMA_VERSION,
             }
-            marker_path.write_text(json.dumps(marker, indent=2))
+            self._atomic_write(marker_path, json.dumps(marker, indent=2))
             return {"status": "created", "marker": marker}
         finally:
             lock.release()
