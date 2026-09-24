@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from unittest.mock import MagicMock
 import pytest
 import requests
@@ -98,14 +97,14 @@ def test_crash_between_github_and_marker(tmp_path, monkeypatch):
     key = exporter._idempotency_key(record)
     marker_path = exporter._marker_path(key)
     
-    # Monkeypatch write_text to simulate a crash exactly when the final marker is being written
-    original_write_text = Path.write_text
-    def failing_write_text(self, data, *args, **kwargs):
+    # Monkeypatch _atomic_write to simulate a crash exactly when the final marker is being written
+    original_atomic = GitHubIssueExporter._atomic_write
+    def failing_atomic_write(self, path, data, *args, **kwargs):
         if "github_issue_url" in data:
             raise OSError("Simulated crash writing final marker!")
-        return original_write_text(self, data, *args, **kwargs)
+        return original_atomic(self, path, data, *args, **kwargs)
         
-    monkeypatch.setattr(Path, "write_text", failing_write_text)
+    monkeypatch.setattr(GitHubIssueExporter, "_atomic_write", failing_atomic_write)
     
     with pytest.raises(OSError, match="Simulated crash"):
         exporter.export(record)
