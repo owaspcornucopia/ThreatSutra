@@ -184,7 +184,6 @@ def test_save_output_invalid_decision(monkeypatch, tmp_path):
 
 def test_save_output_atomic_write_failure_cleans_temp(monkeypatch, tmp_path):
     """Cover cli.py lines 106-109: if the atomic temp write fails, temp file is cleaned up."""
-    import tempfile
     src_dir = tmp_path / "src"
     src_dir.mkdir()
     fake_cli_py = src_dir / "cli.py"
@@ -192,11 +191,10 @@ def test_save_output_atomic_write_failure_cleans_temp(monkeypatch, tmp_path):
 
     # Let the reservation (os.open with O_EXCL) succeed normally,
     # but make json.dump raise during the atomic write phase
-    original_dump = json.dump
     dump_calls = [0]
     def failing_dump(*args, **kwargs):
         dump_calls[0] += 1
-        raise IOError("simulated disk failure")
+        raise OSError("simulated disk failure")
     monkeypatch.setattr(json, "dump", failing_dump)
 
     context = build_context()
@@ -208,7 +206,7 @@ def test_save_output_atomic_write_failure_cleans_temp(monkeypatch, tmp_path):
         "source_milestone_number": 1,
     }
     relevance = RelevanceAssessment(score=8, color="green", explanation="Relevant", assessed_issue_urls=())
-    with pytest.raises(IOError, match="simulated disk failure"):
+    with pytest.raises(OSError, match="simulated disk failure"):
         save_output(context, artifact, relevance, "approve")
     # No temp files AND no empty reservation files should remain
     output_dir = os.path.join(str(tmp_path), "outputs")

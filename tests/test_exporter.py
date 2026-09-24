@@ -844,8 +844,6 @@ def test_search_invalid_total_count_returns_none(tmp_path, monkeypatch):
 
 def test_reconcile_atomic_write_oserror(tmp_path, monkeypatch):
     """Cover lines 285-286: _reconcile_with_github returns io_error when _atomic_write raises OSError."""
-    from datetime import datetime, timezone
-    from unittest.mock import patch
     monkeypatch.setenv("GITHUB_API", "fake-token")
     exporter = make_exporter(tmp_path, dry_run=False)
     key = exporter._idempotency_key(REVIEW_RECORD)
@@ -912,7 +910,7 @@ def test_post_response_invalid_number_or_url(tmp_path, monkeypatch):
 
 # ---- Cross-process regression test (Issue #56) ----
 def _mp_worker_export_crash(markers_dir, review_record, ready_flag_path, crash_phase, post_count_path):
-    import os, time
+    import time
     from pathlib import Path
     from src.adapters.GitHubIssueExporter import GitHubIssueExporter
 
