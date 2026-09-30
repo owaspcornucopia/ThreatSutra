@@ -977,7 +977,8 @@ def _mp_worker_export_recover(markers_dir, review_record, result_path, post_coun
     Path(result_path).write_text(_json.dumps(result))
 
 def test_cross_process_export_lock_crash_recovery_post_attempted(tmp_path):
-    import multiprocessing, time, json, sys
+    import multiprocessing
+    import time
     for _ in range(20):
         # Clean state for each iteration
         for child in tmp_path.iterdir():
