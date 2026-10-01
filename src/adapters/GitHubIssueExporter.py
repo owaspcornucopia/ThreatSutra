@@ -156,12 +156,17 @@ class GitHubIssueExporter:
     def _atomic_write(self, path: Path, content: str) -> None:
         fd, temp_path = tempfile.mkstemp(dir=path.parent, prefix=".tmp_")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
+            try:
+                file_obj = os.fdopen(fd, "w", encoding="utf-8")
+            except BaseException:
+                os.close(fd)
+                raise
+            with file_obj as f:
                 f.write(content)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temp_path, path)
-        except Exception:
+        except BaseException:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             raise
