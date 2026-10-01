@@ -96,15 +96,16 @@ def save_output(context, artifact: dict, relevance, decision: str) -> str:
             os.close(fd)
             
             # Fill it via atomic mkstemp+fsync+replace
-            temp_fd, temp_path = tempfile.mkstemp(dir=output_dir, prefix=".tmp_")
+            temp_path = None
             try:
+                temp_fd, temp_path = tempfile.mkstemp(dir=output_dir, prefix=".tmp_")
                 with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
                     json.dump(output_data, f, indent=4, ensure_ascii=False)
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(temp_path, output_path)
             except Exception:
-                if os.path.exists(temp_path):
+                if temp_path is not None and os.path.exists(temp_path):
                     os.remove(temp_path)
                 if os.path.exists(output_path):
                     os.remove(output_path)
