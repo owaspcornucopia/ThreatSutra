@@ -174,9 +174,9 @@ Review records are written to `outputs/` as timestamped JSON files. Export marke
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | **204 / 204 passing** |
+| **Total tests** | Dynamically tracked. View the latest [GitHub Actions run](https://github.com/owaspcornucopia/ThreatSutra/actions/workflows/tests.yml) for exact counts. |
 | **Coverage** | [![Coverage](https://qlty.sh/gh/owaspcornucopia/projects/ThreatSutra/coverage.svg)](https://qlty.sh/gh/owaspcornucopia/projects/ThreatSutra) |
-| **Security** | [![Security](https://qlty.sh/gh/owaspcornucopia/projects/ThreatSutra/security.svg)](https://qlty.sh/gh/owaspcornucopia/projects/ThreatSutra) |
+| **Security** | `Grade A` enforced via Qlty |
 | **CI** | ![CI: passing](https://github.com/owaspcornucopia/ThreatSutra/actions/workflows/tests.yml/badge.svg) (Python 3.14) |
 | **Coverage gate** | `--cov-fail-under=95` enforced in CI |
 | **Lint / Types** | `ruff` and `mypy` enforced in CI |
