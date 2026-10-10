@@ -132,16 +132,17 @@ def test_save_output_retries_on_file_exists_error(monkeypatch, tmp_path):
     fake_cli_py = src_dir / "cli.py"
     monkeypatch.setattr(src.cli, "__file__", str(fake_cli_py))
     
-    # Mock os.open to raise FileExistsError the first time, then succeed
+    # Mock os.open to raise FileExistsError the first time it tries to open the final path
     original_open = os.open
-    open_calls = 0
+    reservation_calls = 0
     
-    def mock_open(*args, **kwargs):
-        nonlocal open_calls
-        open_calls += 1
-        if open_calls == 1:
-            raise FileExistsError("Simulated collision")
-        return original_open(*args, **kwargs)
+    def mock_open(path, flags, *args, **kwargs):
+        nonlocal reservation_calls
+        if (flags & os.O_EXCL) and "review_" in str(path):
+            reservation_calls += 1
+            if reservation_calls == 1:
+                raise FileExistsError("Simulated collision")
+        return original_open(path, flags, *args, **kwargs)
         
     monkeypatch.setattr(os, "open", mock_open)
     
@@ -157,9 +158,63 @@ def test_save_output_retries_on_file_exists_error(monkeypatch, tmp_path):
     
     out_path = save_output(context, artifact, relevance, "approve")
     
-    # It must have called os.open twice (first failed, second succeeded)
-    assert open_calls == 2
+    # It must have attempted reservation twice (first failed, second succeeded)
+    assert reservation_calls == 2
     assert os.path.exists(out_path)
+
+
+def test_save_output_invalid_decision(monkeypatch, tmp_path):
+    """Cover cli.py line 59: save_output raises ValueError for invalid decision."""
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    fake_cli_py = src_dir / "cli.py"
+    monkeypatch.setattr(src.cli, "__file__", str(fake_cli_py))
+    context = build_context()
+    artifact = {
+        "artifact_type": "evil_user_story",
+        "text": "test",
+        "source_threat_id": "T1",
+        "source_card_id": "C1",
+        "source_milestone_number": 1,
+    }
+    relevance = RelevanceAssessment(score=8, color="green", explanation="Relevant", assessed_issue_urls=())
+    with pytest.raises(ValueError, match="must be 'approve' or 'reject'"):
+        save_output(context, artifact, relevance, "maybe")
+
+
+def test_save_output_atomic_write_failure_cleans_temp(monkeypatch, tmp_path):
+    """Cover cli.py lines 106-109: if the atomic temp write fails, temp file is cleaned up."""
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    fake_cli_py = src_dir / "cli.py"
+    monkeypatch.setattr(src.cli, "__file__", str(fake_cli_py))
+
+    # Let the reservation (os.open with O_EXCL) succeed normally,
+    # but make json.dump raise during the atomic write phase
+    dump_calls = [0]
+    def failing_dump(*args, **kwargs):
+        dump_calls[0] += 1
+        raise OSError("simulated disk failure")
+    monkeypatch.setattr(json, "dump", failing_dump)
+
+    context = build_context()
+    artifact = {
+        "artifact_type": "evil_user_story",
+        "text": "test",
+        "source_threat_id": "T1",
+        "source_card_id": "C1",
+        "source_milestone_number": 1,
+    }
+    relevance = RelevanceAssessment(score=8, color="green", explanation="Relevant", assessed_issue_urls=())
+    with pytest.raises(OSError, match="simulated disk failure"):
+        save_output(context, artifact, relevance, "approve")
+    # No temp files AND no empty reservation files should remain
+    output_dir = os.path.join(str(tmp_path), "outputs")
+    if os.path.exists(output_dir):
+        tmp_files = [f for f in os.listdir(output_dir) if f.startswith(".tmp_")]
+        assert tmp_files == [], f"Orphaned temp files found: {tmp_files}"
+        json_files = [f for f in os.listdir(output_dir) if f.endswith(".json")]
+        assert json_files == [], f"Orphaned empty reservation files found: {json_files}"
 
 
 def test_print_relevance_green(capsys):
