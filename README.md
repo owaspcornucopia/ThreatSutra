@@ -21,7 +21,9 @@ ThreatSutra reads an OWASP Threat Dragon data flow diagram, enriches each threat
 We are building AI-assisted security requirement generation that automates threat modelling through gamification, using game outcomes as inputs for automated threat modelling and requirement analysis. 
 The idea is to keep human creativity and knowledge at the centre of secure design.
 
-## Why not use AI to generate all threats based on its analysis of the proposed architecture and system design?
+## Why should I use gamification
+
+## Why not use AI to do the threat modelling?
 
 When creating a secure design, AI will struggle to make the right trade-offs between delivering system functionality and ensuring risks and threats are properly mitigated according to what business stakeholders consider acceptable risk. This is because these decisions are based on what we consider acceptable, not what is most secure.
 
@@ -59,21 +61,24 @@ As they also state:
 <a id="citation-1"></a>
 **[1]** *OpenAI – Hugging Face Incident - Technical Report*, page 8.  
 Citation: “On July 6, OpenAI responsibly disclosed the vulnerability to JFrog, the developer of Artifactory. Cyber evaluation workloads resumed on July 7.”  
-Source: [OpenAI Technical Report PDF](https://openai.com)
+Source: [OpenAI Technical Report PDF](https://cdn.openai.com/pdf/67869394-cb91-4c12-888c-5cbd85c7814c/OpenAI-Hugging-Face%20Incident-Technical-Report.pdf#page=8)
 
 <a id="citation-2"></a>
 **[2]** *OpenAI – Hugging Face Incident - Technical Report*, page 29.  
 Citation: “If our currently deployed CoT monitoring system was running at the time of the incident, it would have caught the initial relevant activity and paged our security team more than a day before models breached Hugging Face systems.”  
-Source: [OpenAI Technical Report PDF](https://openai.com)
+Source: [OpenAI Technical Report PDF](https://cdn.openai.com/pdf/67869394-cb91-4c12-888c-5cbd85c7814c/OpenAI-Hugging-Face%20Incident-Technical-Report.pdf#page=29)
 
 <a id="citation-3"></a>
 **[3]** *OpenAI Preparedness Framework*, page 19.  
 Citation: “These misalignment claims may be further complemented by the safeguards applied towards the malicious-actor-oriented “Robustness” and “Usage Monitoring” claims, which similarly limit a misaligned model’s use of its own or another model’s capabilities. The table below illustrates possible examples of safeguards and safeguard efficacy assessments we could consider to claim we have sufficiently minimized the risks of severe harm associated with High level of capability under any of our Tracked Categories.”  
-Source: [Preparedness Framework PDF](https://openai.com)
+Source: [Preparedness Framework PDF](https://cdn.openai.com/pdf/18a02b5d-6b67-4cec-ab64-68cdfbddebcd/preparedness-framework-v2.pdf#page=19)
 
 <a id="citation-4"></a>
 **[4]** *OpenAI Preparedness Framework*, page 4.  
-Source: [Preparedness Framework PDF](https://openai.com)
+Source: [Preparedness Framework PDF](https://cdn.openai.com/pdf/18a02b5d-6b67-4cec-ab64-68cdfbddebcd/preparedness-framework-v2.pdf#page=4)
+
+[*OpenAI – Hugging Face Incident - Technical Report*](https://github.com/owaspcornucopia/ThreatSutra/blob/main/resources/documents/OpenAI-Hugging-Face%20Incident-Technical-Report.pdf)
+[*OpenAI Preparedness Framework*](https://github.com/owaspcornucopia/ThreatSutra/blob/main/resources/documents/preparedness-framework-v2.pdf)
 
 ---
 
