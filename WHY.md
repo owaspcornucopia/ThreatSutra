@@ -9,10 +9,9 @@ To gain understanding and knowledge, we need to develop the skills to recognise 
 
 We often fall into a familiar trap: We read the AI's output, highlight key passages, review the AI's reasoning notes, and nod along with explanations. These activities feel productive — and they do genuinely contribute to learning, but when the day arrives that we need to make a trade-off between what the AI said and something else that is important, we will often realise that our passive familiarity with the AI's conclusions doesn’t translate into the ability to apply these and make the right trade-offs. Nor does it translate into designing and building a secure system.
 
-Consuming information is not the same as developing skill. The cognitive psychologist Daniel T. Willingham captures the distinction between passive and active learning when he writes, “Memory is the residue of thought.” [[1](#citation-1)] In other words, we forget most of what we encounter and remember only what we think about.
+Consuming information is not the same as developing skill. The cognitive psychologist Daniel T. Willingham captures the distinction between passive and active learning when he writes, “Memory is the residue of thought.” ([Willingham, D. T., 2009](#citation-1)) In other words, we forget most of what we encounter and remember only what we think about. Studies on AI use among students who use AI for essay writing further support this. When AI writes for you, your brain goes quieter; an MIT EEG study ([Kosmyna et al., 2025](#citation-6)) found measurably lower neural connectivity in participants who used ChatGPT for essay writing than in those who wrote unaided (or even used a browser). An "LLM might free up mental resources and make the task feel easier, yet the brain of the user of the LLM might not go as deeply into the rich associative processes that unassisted creative writing entails". This lessens the deeper learning required in order to develop the skills needed for critical thinking. As this study indicates, while LLMs "reduce immediate cognitive load, they may simultaneously diminish critical thinking capabilities and lead to decreased engagement in deep analytical processes" 
 
-This is why secure design and threat modelling need to be active learning processes that the team participates in.
-No matter how incredibly good the AI models become, the people using them still need to understand their outputs. Anything else is incompetent.
+But these aren't the only reasons why human reasoning should be at the centre of threat modelling and secure design. Even if your team is well equipped to do secure design and threat modelling and make the right trade-offs, you should still keep human reasoning at the centre of design activities.
 
 ## Why should I use gamification
 
@@ -51,9 +50,8 @@ As they also state:
 
 ### References and Citations
 
-<a id="citation-1"></a>
-**[1]** *Why don't students like school?*, page 47.  
-Willingham, D. T. (2009). *Why don't students like school?: A cognitive scientist answers questions about how the mind works and what it means for the classroom*. Jossey-Bass.
+<a id="citation-6"></a>
+**[Kosmyna et al., 2025]** Kosmyna et al., "Your Brain on ChatGPT", [2506.08872, 2025](https://arxiv.org/abs/2506.08872)
 
 <a id="citation-2"></a>
 **[2]** *OpenAI – Hugging Face Incident - Technical Report*, page 8.  
@@ -74,5 +72,10 @@ Source: [Preparedness Framework PDF](https://cdn.openai.com/pdf/18a02b5d-6b67-4c
 **[5]** *OpenAI Preparedness Framework*, page 4.  
 Source: [Preparedness Framework PDF](https://cdn.openai.com/pdf/18a02b5d-6b67-4cec-ab64-68cdfbddebcd/preparedness-framework-v2.pdf#page=4)
 
-[*OpenAI – Hugging Face Incident - Technical Report*](https://github.com/owaspcornucopia/ThreatSutra/blob/main/resources/documents/OpenAI-Hugging-Face%20Incident-Technical-Report.pdf)
+<a id="citation-1"></a>
+Willingham, D. T. (2009). *Why don't students like school?: A cognitive scientist answers questions about how the mind works and what it means for the classroom*. Jossey-Bass, page 47
+
+Saved resources in case the above reports are missing:
+
+- [*OpenAI – Hugging Face Incident - Technical Report*](https://github.com/owaspcornucopia/ThreatSutra/blob/main/resources/documents/OpenAI-Hugging-Face%20Incident-Technical-Report.pdf)
 [*OpenAI Preparedness Framework*](https://github.com/owaspcornucopia/ThreatSutra/blob/main/resources/documents/preparedness-framework-v2.pdf)
