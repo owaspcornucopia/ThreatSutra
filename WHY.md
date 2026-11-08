@@ -30,7 +30,7 @@ There are several issues with this:
 1. The team velocity will depend on the velocity of the security department/team.
 2. The security department/team will become the bottleneck for software delivery.
 3. The security team will be bypassed in order to ensure product deliveries run according to the promised yearly software production plan to meet the company's annual budget constraints.
-4. The number of security weaknesses and vulnerabilities will increase and eventually lead to security incidents.
+4. The number of security weaknesses and vulnerabilities will increase due to the lack of human oversight and will eventually lead to security incidents.
 
 We have seen several examples of this. One of the most prominent examples is the Hugging Face incident: [Wikipedia: OpenAI rogue agent breach of Hugging Face](https://wikipedia.org), but there have been many others in recent years.
 
