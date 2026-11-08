@@ -12,7 +12,7 @@ AI-assisted security requirement generation from OWASP Threat Dragon models and 
 ## Overview
 
 We are building AI-assisted security requirement generation that automates threat modelling through gamification, using game outcomes as inputs for automated threat modelling and requirement analysis. 
-The idea is to keep human creativity and knowledge at the centre of secure design
+The idea is to keep human creativity and knowledge at the centre of secure design.
 
 ThreatSutra reads an OWASP Threat Dragon data flow diagram, enriches each threat with its mapped Cornucopia card and explanation content, and uses a large language model to generate structured security artefacts. Every generated artefact passes strict format validation and requires explicit human approval before it is persisted or exported.
 
