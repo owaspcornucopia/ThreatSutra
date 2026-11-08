@@ -15,7 +15,7 @@ Neuroscience research suggests a sweet spot for difficulty. Research suggests th
 
 But these aren't the only reasons why human reasoning should be at the centre of threat modelling and secure design. Even if your team is well equipped to do secure design and threat modelling and make the right trade-offs, you should still keep human reasoning at the centre of design activities.
 
-## Why not use AI for threat modelling?
+## Why not use AI to completely automate threat modelling?
 
 When creating a secure design, AI will struggle to make the right trade-offs between delivering system functionality and ensuring risks and threats are properly mitigated according to what business stakeholders consider acceptable risk. This is because these decisions are based on what we consider acceptable, not what is most secure.
 
