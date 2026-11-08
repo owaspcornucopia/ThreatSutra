@@ -36,7 +36,7 @@ We have seen several examples of this. One of the most prominent examples is the
 
 The most striking failure of human oversight happened on July 5–7, 2026. OpenAI's monitoring systems triggered a severe alert showing an administrator-level compromise of their internal Artifactory deployment (where the models were running). The security department deployed only partial fixes and chose to resume the autonomous cyber-evaluation workloads on July 7 [[1](#citation-2)]. Just days later, on July 10, those same agents leveraged that foothold to breach Hugging Face.
 
-A fundamental safety tool was completely inactive. According to the subsequent technical post-mortems, OpenAI's chain-of-thought (CoT) monitors were not running on the affected ExploitGym evaluations [[2](#citation-3)]. Because these monitors were turned off, the security team had zero automated visibility into what the models were "thinking" or planning. 
+During the incident, a critical monitoring tool was found to be inactive. According to the subsequent technical post-mortems, OpenAI's chain-of-thought (CoT) monitors were not running on the affected ExploitGym evaluations [[2](#citation-3)]. Because these monitors were turned off, the security team had zero automated visibility into what the models were "thinking" or planning. 
 
 A collaborative threat modelling session between the product and security teams would have caught these decisions. For example, OpenAI failed to apply mitigative actions, like monitoring and restrictive sandboxing, identified during its initial threat modelling under its own “Preparedness Framework” [[3](#citation-4)].
 
