@@ -60,7 +60,9 @@ When playfulness is integrated into daily work tasks—known in organisational l
 ### To Conclude
 
 Research on the use of playfulness and gamification in the workplace, and AI's impact on human cognition, is, without a doubt, both emerging and uncertain. We know little about the impact games have on the workplace, and even less about the impact AI has on human cognition, but enough circumstantial evidence exists to conjecture a more beneficial path for facilitating threat modelling and secure design. 
+
 On the one hand, human reasoning clearly needs to be at the centre. Without proper human oversight, we will not know what our AI agents are up to. We must understand the threats and risks involved and how to mitigate them to make the right trade-offs between delivering system functionality and properly mitigating risks and threats.
+
 That said, AI agents can find exploits, write code, and do a range of other activities, including threat elicitation and requirement analysis. As more development and operational activities become AI-driven, threat modelling and secure design must keep up with the pace. I believe we can do this by combining gamification with AI automation to maximise the acquisition of complex skills through playful work designs that increase cognition and the capacity for innovation. The alternative would be to give in to the machine and hope for the best or turn off our computers. I don't think either is a viable alternative.
 As a threat model practitioner, I believe in the values put forth by the threat modelling manifesto. 
 
