@@ -71,7 +71,7 @@ We have come to value:
 
 - A culture of finding and fixing design issues over checkbox compliance (Real understanding before security theatre)
 - People and collaboration over processes, methodologies, and tools (Human reasoning before AI)
-- A journey of understanding over a security or privacy snapshot (Human oversight before an AI's reasoning trace)
+- A journey of understanding over a security or privacy snapshot (Human understanding before an AI's reasoning trace)
 - Doing threat modeling over talking about it (Not just talk the talk, walk the walk)
 - Continuous refinement over a single delivery (Keeping up with the pace instead of writing the incident reports)
 
