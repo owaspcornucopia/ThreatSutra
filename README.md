@@ -14,17 +14,20 @@ AI-assisted security requirement generation from OWASP Threat Dragon models and 
 We are building AI-assisted security requirement generation that automates threat modelling through gamification, using game outcomes as inputs for automated threat modelling and requirement analysis. 
 The idea is to keep human creativity and knowledge at the centre of secure design.
 
+Imagine coming into a Threat Modelling session. Instead of doing threat modelling, you play a game while an AI assistant is taking notes. Before the game begins, you're presented with a diagram an AI assistant created. You discuss the diagram with your colleagues and ask the AI to correct any issues until it looks right. The game begins. You get dealt a hand of cards. As you play, the AI keeps note of the score. Each scoring card becomes a threat on your diagram, and after you approve it, the AI uploads any remediation steps to your issue-tracking system of choice, along with an analysis of the requirements and tests those steps should cover. Once the game is finished, your secure design is done, your backlog is full, and your threat modelling report is ready for delivery to your InfoSec department for review.
+
+## Why ThreatSutra?
+
+Please read [why use OWASP Cornucopia & ThreatSutra?](WHY.md)
+
+## Functionality
+
 ThreatSutra reads an OWASP Threat Dragon data flow diagram, enriches each threat with its mapped Cornucopia card and explanation content, and uses a large language model to generate structured security artefacts. Every generated artefact passes strict format validation and requires explicit human approval before it is persisted or exported.
 
 **Intended users:** Security practitioners running threat model reviews, developers translating threat models into backlog items, and teams integrating security requirements into their development workflow.
 
 We are building AI-assisted security requirement generation that automates threat modelling through gamification, using game outcomes as inputs for automated threat modelling and requirement analysis. 
 The idea is to keep human creativity and knowledge at the centre of secure design.
-
-
-## Why ThreatSutra?
-
-Please read [why use OWASP Cornucopia & ThreatSutra?](WHY.md)
 
 ---
 
